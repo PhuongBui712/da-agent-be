@@ -3,6 +3,7 @@
 Everything the agent needs to locate itself on disk lives here. Kept dependency-free
 so it can be imported by both the CLI and (later) the web backend.
 """
+
 from __future__ import annotations
 
 import os
@@ -29,20 +30,32 @@ class Settings:
     """Runtime settings. Override via env vars or constructor; safe defaults otherwise."""
 
     # --- model / agent loop ---
-    model: str = field(default_factory=lambda: os.getenv("DA_AGENT_MODEL", "databricks-claude-sonnet-4-6"))
-    max_turns: int | None = field(default_factory=lambda: _int_env("DA_AGENT_MAX_TURNS"))
+    model: str = field(
+        default_factory=lambda: os.getenv(
+            "DA_AGENT_MODEL", "databricks-claude-sonnet-4-6"
+        )
+    )
+    max_turns: int | None = field(
+        default_factory=lambda: _int_env("DA_AGENT_MAX_TURNS")
+    )
 
     # Start each session in plan mode so complex requests produce a plan + approval
     # (demonstrates the approval UX). Flip to False for straight-to-execution.
-    plan_first: bool = field(default_factory=lambda: _bool_env("DA_AGENT_PLAN_FIRST", True))
+    plan_first: bool = field(
+        default_factory=lambda: _bool_env("DA_AGENT_PLAN_FIRST", False)
+    )
 
     # Show the model's extended-thinking blocks in the TUI.
-    show_thinking: bool = field(default_factory=lambda: _bool_env("DA_AGENT_SHOW_THINKING", True))
+    show_thinking: bool = field(
+        default_factory=lambda: _bool_env("DA_AGENT_SHOW_THINKING", True)
+    )
 
     # --- filesystem ---
     project_root: Path = field(default_factory=find_project_root)
     data_root: Path = field(
-        default_factory=lambda: Path(os.getenv("DA_AGENT_HOME", "~/.da-agent")).expanduser()
+        default_factory=lambda: Path(
+            os.getenv("DA_AGENT_HOME", "~/.da-agent")
+        ).expanduser()
     )
 
     @property
