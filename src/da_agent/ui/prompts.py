@@ -4,6 +4,7 @@ Renders the tabbed multiple-choice picker (like Claude Code's AskUserQuestion) a
 plan approval prompt. Inline (non-fullscreen) so the conversation scrollback stays
 visible. Falls back to a plain stdin selector when there is no TTY (pipes, the demo).
 """
+
 from __future__ import annotations
 
 import sys
@@ -70,7 +71,9 @@ async def confirm_plan() -> PlanDecision:
     if chosen and chosen[0].startswith("Yes"):
         return PlanDecision(verdict=PlanVerdict.APPROVE)
     feedback = await _ask_text("  What should change? ")
-    return PlanDecision(verdict=PlanVerdict.REJECT, feedback=feedback or "Please revise the plan.")
+    return PlanDecision(
+        verdict=PlanVerdict.REJECT, feedback=feedback or "Please revise the plan."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -147,17 +150,30 @@ def build_selector_app(questions: list[Question]):
                     label, desc, chosen = _OTHER_LABEL, "", state["other"][tab]
                 else:
                     o = q.options[oi]
-                    label, desc, chosen = o.label, o.description, oi in state["selected"][tab]
-                box = ("[x]" if chosen else "[ ]") if q.multi_select else ("(•)" if chosen else "( )")
+                    label, desc, chosen = (
+                        o.label,
+                        o.description,
+                        oi in state["selected"][tab],
+                    )
+                box = (
+                    ("[x]" if chosen else "[ ]")
+                    if q.multi_select
+                    else ("(•)" if chosen else "( )")
+                )
                 arrow = "❯" if cur else " "
                 out.append(("class:cursor" if cur else "", f" {arrow} "))
                 out.append(("class:num", f"{oi + 1}. "))
-                out.append(("class:opt.sel" if chosen else "class:opt", f"{box} {label}\n"))
+                out.append(
+                    ("class:opt.sel" if chosen else "class:opt", f"{box} {label}\n")
+                )
                 if desc:
                     out.append(("class:desc", f"       {desc}\n"))
             out.append(("", "\n"))
             out.append(
-                ("class:footer", "↑/↓ move · Enter/Space select · ←/→ next · Esc cancel\n")
+                (
+                    "class:footer",
+                    "↑/↓ move · Enter/Space select · ←/→ next · Esc cancel\n",
+                )
             )
         return out
 
@@ -201,6 +217,7 @@ def build_selector_app(questions: list[Question]):
         state["tab"] = t + 1  # advance toward Submit
 
     for d in range(1, 10):
+
         @kb.add(str(d))
         def _(e, d=d):
             t = state["tab"]
@@ -214,7 +231,9 @@ def build_selector_app(questions: list[Question]):
         e.app.exit(result=None)
 
     app = Application(
-        layout=Layout(Window(FormattedTextControl(fragments, focusable=True), wrap_lines=True)),
+        layout=Layout(
+            Window(FormattedTextControl(fragments, focusable=True), wrap_lines=True)
+        ),
         key_bindings=kb,
         style=_STYLE,
         full_screen=False,

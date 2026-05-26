@@ -2,44 +2,60 @@
 
 `ConsoleAgentUI` implements the full `AgentUI` protocol. Rendering uses rich; the
 interactive bits (questions, plan approval) delegate to `ui.prompts` (prompt_toolkit).
-The spinner is owned here and is paused before any interactive prompt so the two
-libraries never fight over the terminal.
+
+A single `rich.live.Live` region owns the bottom of the terminal whenever a wait
+indicator OR a todo list is active. Streaming text/tool prints scroll above it;
+the overlay redraws as state changes.
 """
+
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from rich.console import Console
-from rich.status import Status
+from rich.console import Console, Group
+from rich.live import Live
+from rich.spinner import Spinner
 from rich.text import Text
 
-from ..agent.events import PlanDecision, QuestionRequest, QuestionResponse
+from ..agent.events import (
+    PlanDecision,
+    QuestionRequest,
+    QuestionResponse,
+    TodoSnapshot,
+    TodoStatus,
+)
 from . import prompts as interactive
 
 _RESULT_MAX_LINES = 14
 _THINKING_MAX_CHARS = 600
 _GREEN = "#3fb950"
 _DIM = "grey62"
+_ACTIVE = "bold"
+_DONE = "green"
+
+_BOX_PENDING = "□"
+_BOX_ACTIVE = "▪"
+_BOX_DONE = "✔"
 
 
 class ConsoleAgentUI:
     def __init__(self, console: Console | None = None) -> None:
         self.console = console or Console()
-        self._status: Status | None = None
+        self._live: Live | None = None
+        self._wait_label: str = ""
+        self._todos: TodoSnapshot = TodoSnapshot()
 
     # ------------------------------------------------------------------ #
     # waiting indicator
     # ------------------------------------------------------------------ #
     def begin_wait(self, label: str = "Working") -> None:
-        self.end_wait()
-        self._status = self.console.status(Text(f" {label}…", style=_DIM), spinner="dots")
-        self._status.start()
+        self._wait_label = label
+        self._refresh_overlay()
 
     def end_wait(self) -> None:
-        if self._status is not None:
-            self._status.stop()
-            self._status = None
+        self._wait_label = ""
+        self._refresh_overlay()
 
     # ------------------------------------------------------------------ #
     # render
@@ -64,7 +80,9 @@ class ConsoleAgentUI:
         self.console.print()
         self.console.print(Text(text.strip()))
 
-    def on_tool_use(self, name: str, tool_input: dict[str, Any], *, depth: int = 0) -> None:
+    def on_tool_use(
+        self, name: str, tool_input: dict[str, Any], *, depth: int = 0
+    ) -> None:
         self.end_wait()
         pad = "  " * depth
         head = Text(f"{pad}● ", style=_GREEN) + Text(name, style="bold")
@@ -73,7 +91,9 @@ class ConsoleAgentUI:
             head += Text(f"({arg})", style=_DIM)
         self.console.print(head)
 
-    def on_tool_result(self, summary: str, *, is_error: bool = False, depth: int = 0) -> None:
+    def on_tool_result(
+        self, summary: str, *, is_error: bool = False, depth: int = 0
+    ) -> None:
         self.end_wait()
         pad = "  " * depth
         lines = summary.rstrip().splitlines() or [""]
@@ -91,9 +111,14 @@ class ConsoleAgentUI:
             note = f"session ready · {model}" if model else "session ready"
             self.console.print(Text(f"· {note}", style=_DIM))
 
-    def on_result(self, *, turns: int, cost_usd: float | None, duration_s: float) -> None:
+    def on_result(
+        self, *, turns: int, cost_usd: float | None, duration_s: float
+    ) -> None:
         self.end_wait()
-        bits = [f"done in {duration_s:.1f}s", f"{turns} turn{'s' if turns != 1 else ''}"]
+        bits = [
+            f"done in {duration_s:.1f}s",
+            f"{turns} turn{'s' if turns != 1 else ''}",
+        ]
         if cost_usd:
             bits.append(f"${cost_usd:.4f}")
         self.console.print()
@@ -102,6 +127,10 @@ class ConsoleAgentUI:
     def on_error(self, message: str) -> None:
         self.end_wait()
         self.console.print(Text(f"✗ {message}", style="bold red"))
+
+    def on_todos(self, snapshot: TodoSnapshot) -> None:
+        self._todos = snapshot
+        self._refresh_overlay()
 
     # ------------------------------------------------------------------ #
     # interaction
@@ -121,6 +150,70 @@ class ConsoleAgentUI:
         for line in plan.strip().splitlines():
             self.console.print(Text("  " + line))
 
+    # ------------------------------------------------------------------ #
+    # live overlay
+    # ------------------------------------------------------------------ #
+    def _refresh_overlay(self) -> None:
+        renderable = self._build_overlay()
+        if renderable is None:
+            self._stop_live()
+            return
+        if self._live is None:
+            self._live = Live(
+                renderable,
+                console=self.console,
+                refresh_per_second=12,
+                transient=True,
+            )
+            self._live.start()
+        else:
+            self._live.update(renderable)
+
+    def _stop_live(self) -> None:
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+
+    def _build_overlay(self):
+        has_label = bool(self._wait_label)
+        has_todos = bool(self._todos)
+        if not has_label and not has_todos:
+            return None
+
+        rows: list[Any] = []
+        if has_label:
+            label = self._wait_label
+            active = self._todos.in_progress if has_todos else None
+            if active is not None:
+                label = active.display_text
+            rows.append(Spinner("dots", text=Text(f" {label}…", style=_DIM)))
+        if has_todos:
+            rows.append(_render_todo_list(self._todos))
+        return Group(*rows) if len(rows) > 1 else rows[0]
+
+
+# --------------------------------------------------------------------------- #
+# helpers
+# --------------------------------------------------------------------------- #
+def _render_todo_list(snapshot: TodoSnapshot) -> Text:
+    """Format the snapshot as a checkbox-style block (in_progress in bold)."""
+    block = Text()
+    for i, item in enumerate(snapshot.items):
+        prefix = "  └ " if i == 0 else "    "
+        if item.status is TodoStatus.IN_PROGRESS:
+            box, style = _BOX_ACTIVE, _ACTIVE
+        elif item.status is TodoStatus.COMPLETED:
+            box, style = _BOX_DONE, _DONE
+        else:
+            box, style = _BOX_PENDING, _DIM
+        line = Text(prefix, style=_DIM) + Text(
+            f"{box} {item.display_text}", style=style
+        )
+        block.append_text(line)
+        if i < len(snapshot.items) - 1:
+            block.append("\n")
+    return block
+
 
 def _format_args(name: str, ti: dict[str, Any]) -> str:
     if not ti:
@@ -135,9 +228,6 @@ def _format_args(name: str, ti: dict[str, Any]) -> str:
         sub = ti.get("subagent_type", "")
         desc = ti.get("description", "")
         return _truncate(f"{sub}: {desc}".strip(": "), 90)
-    if name == "TodoWrite":
-        todos = ti.get("todos", [])
-        return f"{len(todos)} item{'s' if len(todos) != 1 else ''}"
     if name == "Skill":
         return _truncate(str(ti.get("name", "")), 60)
     try:
