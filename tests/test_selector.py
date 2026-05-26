@@ -1,4 +1,5 @@
 """Drive the real prompt_toolkit selector with scripted keystrokes (no terminal)."""
+
 from __future__ import annotations
 
 import pytest
@@ -27,7 +28,13 @@ async def _drive(questions, keys):
 
 @pytest.mark.asyncio
 async def test_single_select_arrow_and_enter():
-    q = Question("Where?", "Output", [Option("a"), Option("b"), Option("c")], multi_select=False, allow_other=False)
+    q = Question(
+        "Where?",
+        "Output",
+        [Option("a"), Option("b"), Option("c")],
+        multi_select=False,
+        allow_other=False,
+    )
     # down -> cursor=1, enter -> select+advance to Submit, enter -> submit
     state = await _drive([q], [DOWN, ENTER, ENTER])
     assert state["selected"][0] == {1}
@@ -35,7 +42,13 @@ async def test_single_select_arrow_and_enter():
 
 @pytest.mark.asyncio
 async def test_digit_select():
-    q = Question("Where?", "Output", [Option("a"), Option("b"), Option("c")], multi_select=False, allow_other=False)
+    q = Question(
+        "Where?",
+        "Output",
+        [Option("a"), Option("b"), Option("c")],
+        multi_select=False,
+        allow_other=False,
+    )
     # press '3' selects option 3 (single-select), then go to submit and enter
     state = await _drive([q], ["3", RIGHT, ENTER])
     assert state["selected"][0] == {2}
@@ -43,7 +56,13 @@ async def test_digit_select():
 
 @pytest.mark.asyncio
 async def test_multi_select_space_toggles():
-    q = Question("Pick", "Tags", [Option("x"), Option("y"), Option("z")], multi_select=True, allow_other=False)
+    q = Question(
+        "Pick",
+        "Tags",
+        [Option("x"), Option("y"), Option("z")],
+        multi_select=True,
+        allow_other=False,
+    )
     # space toggles option 1; down; space toggles option 2; right to submit; enter
     state = await _drive([q], [SPACE, DOWN, SPACE, RIGHT, ENTER])
     assert state["selected"][0] == {0, 1}
