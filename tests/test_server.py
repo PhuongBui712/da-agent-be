@@ -854,3 +854,13 @@ async def test_streaming_per_turn_state_resets_between_turns(app, client):
     deltas2 = [p["text"] for t, p in events2 if t == "assistant.text.delta"]
     assert "turn1" in deltas1
     assert "turn2" in deltas2
+
+
+# --------------------------------------------------------------------------- #
+# F. KB registry is wired into AppState
+# --------------------------------------------------------------------------- #
+async def test_app_state_has_kb_registry(app):
+    state = app.state.app_state
+    assert state.kb is not None
+    files = await state.kb.list()
+    assert files == []  # fresh registry

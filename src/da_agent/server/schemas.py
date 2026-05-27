@@ -61,3 +61,18 @@ class PendingInteractionResponse(BaseModel):
 
 class PendingInteractionsListResponse(BaseModel):
     pending: list[PendingInteractionResponse]
+
+
+# --- KB --------------------------------------------------------------- #
+class KbFileResponse(BaseModel):
+    id: str
+    filename: str
+    size_bytes: int
+    status: Literal["PENDING", "PROCESSING", "READY", "FAILED"]
+    created_at: float
+    updated_at: float
+    error: str | None = None
+
+
+class KbFileListResponse(BaseModel):
+    files: list[KbFileResponse]

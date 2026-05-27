@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Settings
+from ..kb import KbRegistry
 
 
 def _now() -> float:
@@ -246,8 +247,18 @@ class AppState:
         self.settings = settings
         self.registry = SessionRegistry(settings.data_root / "registry.json")
         self.interactions = InteractionStore()
+        self.kb = KbRegistry(settings.kb_dir / "registry.json")
         self._runtimes: dict[str, SessionRuntime] = {}
         self._runtimes_lock = asyncio.Lock()
+        # In-flight KB ingestion tasks. Cancelled on shutdown so the
+        # event loop can exit cleanly; `KbRegistry.load` on the next boot
+        # sweeps any leftover PROCESSING rows back to FAILED.
+        self._kb_tasks: set[asyncio.Task] = set()
+
+    def track_kb_task(self, task: asyncio.Task) -> None:
+        """Register a fire-and-forget KB pipeline task for shutdown cleanup."""
+        self._kb_tasks.add(task)
+        task.add_done_callback(self._kb_tasks.discard)
 
     async def get_or_create_runtime(self, sid: str) -> SessionRuntime | None:
         async with self._runtimes_lock:
@@ -279,5 +290,9 @@ class AppState:
                 pass
 
     async def shutdown(self) -> None:
+        for task in list(self._kb_tasks):
+            task.cancel()
+        if self._kb_tasks:
+            await asyncio.gather(*self._kb_tasks, return_exceptions=True)
         for sid in list(self._runtimes.keys()):
             await self.discard_runtime(sid)
