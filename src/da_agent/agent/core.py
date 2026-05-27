@@ -8,6 +8,7 @@ UI and get the same behavior.
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from typing import Any
 
@@ -16,6 +17,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -60,6 +62,17 @@ class AgentRunner:
         self._client: ClaudeSDKClient | None = None
         self._first_block = True
         self._todos = TodoStore()
+        # Per-turn streaming state. Reset in `send`.
+        # `_stream_blocks`: SDK content-block index -> (kind, block_id) where
+        # kind ∈ {"text", "thinking"}; tool_use indices are absent (the full
+        # ToolUseBlock always dispatches via `_render_block`). Entries persist
+        # for the whole turn so the trailing AssistantMessage can suppress by
+        # position (spec §8.6).
+        self._stream_blocks: dict[int, tuple[str, str]] = {}
+        # block_ids that received at least one delta. A streamed block is
+        # suppressed at its SDK content-block index iff its block_id sits in
+        # this set -- a start+stop pair with zero deltas is NOT suppressed.
+        self._streamed_block_ids: set[str] = set()
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -101,7 +114,7 @@ class AgentRunner:
             max_turns=s.max_turns,
             add_dirs=[str(s.kb_dir), str(s.workspace_dir)],
             env=env,
-            include_partial_messages=False,
+            include_partial_messages=s.stream_responses,
         )
 
     # ------------------------------------------------------------------ #
@@ -112,6 +125,8 @@ class AgentRunner:
         if echo_prompt:
             self.ui.on_user_prompt(prompt)
         self._first_block = True
+        self._stream_blocks.clear()
+        self._streamed_block_ids.clear()
         started = time.monotonic()
         # begin_wait BEFORE the empty todos snapshot so the bottom-anchored overlay
         # transitions through "label only" rather than collapsing and re-mounting --
@@ -132,9 +147,25 @@ class AgentRunner:
     def _render(self, message: Any, started: float) -> None:
         if isinstance(message, SystemMessage):
             self.ui.on_system(message.subtype, message.data or {})
+        elif isinstance(message, StreamEvent):
+            # Subagent token stream is not surfaced in v1 (spec §8.6);
+            # the full subagent AssistantMessage still renders via the
+            # parent_tool_use_id path on the trailing message.
+            if message.parent_tool_use_id is None:
+                self._handle_stream_event(message)
         elif isinstance(message, AssistantMessage):
             depth = 1 if message.parent_tool_use_id else 0
-            for block in message.content:
+            is_main_thread = message.parent_tool_use_id is None
+            for pos, block in enumerate(message.content):
+                # Suppression rule (spec §8.6): on the main thread, a
+                # text/thinking block whose SDK index already streamed at
+                # least one delta is NOT re-rendered atomically. Subagent
+                # AssistantMessages are never suppressed -- token streaming
+                # inside the lane is deferred to v1.1.
+                if is_main_thread and isinstance(block, (TextBlock, ThinkingBlock)):
+                    entry = self._stream_blocks.get(pos)
+                    if entry is not None and entry[1] in self._streamed_block_ids:
+                        continue
                 self._render_block(block, depth)
         elif isinstance(message, UserMessage):
             depth = 1 if getattr(message, "parent_tool_use_id", None) else 0
@@ -148,6 +179,74 @@ class AgentRunner:
                 cost_usd=message.total_cost_usd,
                 duration_s=time.monotonic() - started,
             )
+
+    # ------------------------------------------------------------------ #
+    # token-level streaming (spec §8.6)
+    # ------------------------------------------------------------------ #
+    def _handle_stream_event(self, message: StreamEvent) -> None:
+        ev = message.event or {}
+        ev_type = ev.get("type")
+        if ev_type == "content_block_start":
+            self._on_block_start(ev)
+        elif ev_type == "content_block_delta":
+            self._on_block_delta(ev)
+        elif ev_type == "content_block_stop":
+            self._on_block_stop(ev)
+        # message_start / message_delta / message_stop -> no-op.
+
+    def _on_block_start(self, ev: dict) -> None:
+        idx = ev.get("index")
+        block = ev.get("content_block") or {}
+        kind = block.get("type")
+        if not isinstance(idx, int):
+            return
+        if kind == "text":
+            self._stream_blocks[idx] = ("text", _mint_block_id("txt"))
+        elif kind == "thinking":
+            self._stream_blocks[idx] = ("thinking", _mint_block_id("thk"))
+        # tool_use blocks are not streamed; the full ToolUseBlock arrives in
+        # the trailing AssistantMessage and dispatches via _render_block.
+
+    def _on_block_delta(self, ev: dict) -> None:
+        idx = ev.get("index")
+        delta = ev.get("delta") or {}
+        d_type = delta.get("type")
+        entry = self._stream_blocks.get(idx) if isinstance(idx, int) else None
+        if entry is None:
+            return
+        kind, block_id = entry
+        if d_type == "text_delta" and kind == "text":
+            text = delta.get("text", "")
+            if not text:
+                return
+            self._streamed_block_ids.add(block_id)
+            self.ui.on_text_delta(block_id, text)
+        elif d_type == "thinking_delta" and kind == "thinking":
+            text = delta.get("thinking", "")
+            if not text:
+                return
+            if not self.settings.show_thinking:
+                return
+            self._streamed_block_ids.add(block_id)
+            self.ui.on_thinking_delta(block_id, text)
+        # input_json_delta and signature_delta are dropped in v1.
+
+    def _on_block_stop(self, ev: dict) -> None:
+        idx = ev.get("index")
+        entry = self._stream_blocks.get(idx) if isinstance(idx, int) else None
+        if entry is None:
+            return
+        kind, block_id = entry
+        # Keep the entry in `_stream_blocks` for the rest of the turn so the
+        # trailing AssistantMessage can look up suppression by position.
+        # A start+stop pair with zero deltas is NOT in `_streamed_block_ids`
+        # and therefore will not suppress the atomic render.
+        if block_id not in self._streamed_block_ids:
+            return
+        if kind == "text":
+            self.ui.on_text_end(block_id)
+        elif kind == "thinking" and self.settings.show_thinking:
+            self.ui.on_thinking_end(block_id)
 
     def _render_block(self, block: Any, depth: int) -> None:
         if isinstance(block, ThinkingBlock):
@@ -203,6 +302,11 @@ class AgentRunner:
         """Re-enter plan mode so the next turn produces a plan for approval."""
         if self._client is not None:
             await self._client.set_permission_mode("plan")
+
+
+def _mint_block_id(prefix: str) -> str:
+    """Server-minted opaque block id (`txt_<12hex>` / `thk_<12hex>`, spec §8.6)."""
+    return f"{prefix}_{secrets.token_hex(6)}"
 
 
 def _stringify_tool_result(content: Any) -> str:

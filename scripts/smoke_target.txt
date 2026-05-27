@@ -1,0 +1,2 @@
+This is a tiny target file for the streaming smoke test.
+Line 2: cảm ơn bạn đã đọc file này.

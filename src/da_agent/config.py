@@ -50,6 +50,13 @@ class Settings:
         default_factory=lambda: _bool_env("DA_AGENT_SHOW_THINKING", True)
     )
 
+    # Token-level streaming via SDK `include_partial_messages` (spec §8.6).
+    # When False, the runner falls back to atomic assistant.text / assistant.thinking
+    # SSE events emitted from the trailing AssistantMessage.
+    stream_responses: bool = field(
+        default_factory=lambda: _bool_env("DA_AGENT_STREAM", True)
+    )
+
     # --- filesystem ---
     project_root: Path = field(default_factory=find_project_root)
     data_root: Path = field(

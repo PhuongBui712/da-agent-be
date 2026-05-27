@@ -45,6 +45,11 @@ class ConsoleAgentUI:
         self._live: Live | None = None
         self._wait_label: str = ""
         self._todos: TodoSnapshot = TodoSnapshot()
+        # Streaming buffers (spec §8.6). Console accumulates deltas per
+        # block_id and flushes at `*_end` via the existing on_text /
+        # on_thinking paths -- inline emission would fight rich.Live.
+        self._text_buffers: dict[str, list[str]] = {}
+        self._thinking_buffers: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------------ #
     # waiting indicator
@@ -79,6 +84,29 @@ class ConsoleAgentUI:
         self.end_wait()
         self.console.print()
         self.console.print(Text(text.strip()))
+
+    # --- token-level streaming (spec §8.6) ---------------------------- #
+    def on_text_delta(self, block_id: str, delta: str) -> None:
+        self._text_buffers.setdefault(block_id, []).append(delta)
+
+    def on_text_end(self, block_id: str) -> None:
+        chunks = self._text_buffers.pop(block_id, None)
+        if not chunks:
+            return
+        text = "".join(chunks)
+        if text.strip():
+            self.on_text(text)
+
+    def on_thinking_delta(self, block_id: str, delta: str) -> None:
+        self._thinking_buffers.setdefault(block_id, []).append(delta)
+
+    def on_thinking_end(self, block_id: str) -> None:
+        chunks = self._thinking_buffers.pop(block_id, None)
+        if not chunks:
+            return
+        text = "".join(chunks)
+        if text.strip():
+            self.on_thinking(text)
 
     def on_tool_use(
         self, name: str, tool_input: dict[str, Any], *, depth: int = 0

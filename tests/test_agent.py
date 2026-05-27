@@ -47,6 +47,18 @@ class FakeUI:
     def on_text(self, t):
         self._rec("text", t)
 
+    def on_text_delta(self, block_id, delta):
+        self._rec("text_delta", block_id, delta)
+
+    def on_text_end(self, block_id):
+        self._rec("text_end", block_id)
+
+    def on_thinking_delta(self, block_id, delta):
+        self._rec("thinking_delta", block_id, delta)
+
+    def on_thinking_end(self, block_id):
+        self._rec("thinking_end", block_id)
+
     def on_tool_use(self, n, i, *, depth=0):
         self._rec("tool_use", n, depth)
 
@@ -79,9 +91,10 @@ class FakeUI:
         return self._pd
 
 
-def _runner(ui=None):
+def _runner(ui=None, *, plan_first: bool = True):
     s = Settings()
     s.show_thinking = True
+    s.plan_first = plan_first
     return AgentRunner(ui or FakeUI(), s)
 
 

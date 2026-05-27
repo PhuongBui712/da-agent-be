@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 import httpx
@@ -23,6 +24,8 @@ import pytest_asyncio
 from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
+    StreamEvent,
+    TextBlock,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
@@ -491,3 +494,363 @@ async def test_interaction_requested_and_respond_resolves(app, client):
     requested = next(payload for t, payload in events if t == "interaction.requested")
     assert requested["kind"] == "question"
     assert requested["questions"][0]["header"] == "H"
+
+
+# --------------------------------------------------------------------------- #
+# E. Streaming SSE (spec §8.6)
+# --------------------------------------------------------------------------- #
+
+_BLOCK_ID_TEXT_RE = re.compile(r"^txt_[0-9a-f]{12}$")
+_BLOCK_ID_THINK_RE = re.compile(r"^thk_[0-9a-f]{12}$")
+
+
+def _stream_event(event: dict, parent_tool_use_id: str | None = None) -> StreamEvent:
+    return StreamEvent(
+        uuid="u1",
+        session_id="s1",
+        event=event,
+        parent_tool_use_id=parent_tool_use_id,
+    )
+
+
+def _text_block_stream(index: int, *deltas: str) -> list[StreamEvent]:
+    """Return the start, N delta, stop events for a text block at `index`."""
+    events = [
+        _stream_event(
+            {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "text"},
+            }
+        ),
+    ]
+    for d in deltas:
+        events.append(
+            _stream_event(
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "text_delta", "text": d},
+                }
+            )
+        )
+    events.append(_stream_event({"type": "content_block_stop", "index": index}))
+    return events
+
+
+def _thinking_block_stream(index: int, *deltas: str) -> list[StreamEvent]:
+    """Return the start, N delta, stop events for a thinking block at `index`."""
+    events = [
+        _stream_event(
+            {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "thinking"},
+            }
+        ),
+    ]
+    for d in deltas:
+        events.append(
+            _stream_event(
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "thinking_delta", "thinking": d},
+                }
+            )
+        )
+    events.append(_stream_event({"type": "content_block_stop", "index": index}))
+    return events
+
+
+def _install_script(script: list):
+    """Context-manager helper that monkeypatches FakeClient.__init__ to install a script."""
+    original_init = FakeClient.__init__
+
+    def _init_with_script(self, options=None):
+        original_init(self, options)
+        self.script = list(script)
+
+    FakeClient.__init__ = _init_with_script  # type: ignore[assignment]
+    return original_init
+
+
+def _restore_init(original_init):
+    FakeClient.__init__ = original_init  # type: ignore[assignment]
+
+
+# 16 -----------------------------------------------------------------------
+async def test_streaming_emits_text_delta_and_end_sse_events(app, client):
+    create = await client.post("/sessions", json={"name": "s16"})
+    sid = create.json()["id"]
+
+    script = [
+        *_text_block_stream(0, "Hello", " world"),
+        _result_message(),
+    ]
+    original = _install_script(script)
+    try:
+        events = await _post_message_events(client, sid, "go")
+    finally:
+        _restore_init(original)
+
+    delta_events = [(t, p) for t, p in events if t == "assistant.text.delta"]
+    end_events = [(t, p) for t, p in events if t == "assistant.text.end"]
+
+    assert len(delta_events) == 2
+    assert len(end_events) == 1
+
+    block_id = delta_events[0][1]["block_id"]
+    assert _BLOCK_ID_TEXT_RE.match(block_id), (
+        f"block_id {block_id!r} does not match pattern"
+    )
+    assert delta_events[1][1]["block_id"] == block_id
+    assert end_events[0][1]["block_id"] == block_id
+
+    texts = [p["text"] for _, p in delta_events]
+    assert texts == ["Hello", " world"]
+
+
+# 17 -----------------------------------------------------------------------
+async def test_streaming_emits_thinking_delta_and_end_sse_events(app, client):
+    create = await client.post("/sessions", json={"name": "s17"})
+    sid = create.json()["id"]
+
+    script = [
+        *_thinking_block_stream(0, "hmm", " deeper"),
+        _result_message(),
+    ]
+    original = _install_script(script)
+    try:
+        events = await _post_message_events(client, sid, "go")
+    finally:
+        _restore_init(original)
+
+    delta_events = [(t, p) for t, p in events if t == "assistant.thinking.delta"]
+    end_events = [(t, p) for t, p in events if t == "assistant.thinking.end"]
+
+    assert len(delta_events) == 2
+    assert len(end_events) == 1
+
+    block_id = delta_events[0][1]["block_id"]
+    assert _BLOCK_ID_THINK_RE.match(block_id), (
+        f"block_id {block_id!r} does not match pattern"
+    )
+    assert delta_events[1][1]["block_id"] == block_id
+    assert end_events[0][1]["block_id"] == block_id
+
+
+# 18 -----------------------------------------------------------------------
+async def test_streaming_first_text_delta_emits_wait_end(app, client):
+    create = await client.post("/sessions", json={"name": "s18"})
+    sid = create.json()["id"]
+
+    script = [
+        *_text_block_stream(0, "hi"),
+        _result_message(),
+    ]
+    original = _install_script(script)
+    try:
+        events = await _post_message_events(client, sid, "go")
+    finally:
+        _restore_init(original)
+
+    event_types = [t for t, _ in events]
+
+    # At least one wait.end must appear before the first assistant.text.delta.
+    first_delta_idx = event_types.index("assistant.text.delta")
+    wait_end_before_delta = [
+        i for i, t in enumerate(event_types) if t == "wait.end" and i < first_delta_idx
+    ]
+    assert wait_end_before_delta, (
+        "A wait.end must appear before the first assistant.text.delta"
+    )
+
+
+# 19 -----------------------------------------------------------------------
+async def test_streaming_subagent_event_does_not_reach_sse(app, client):
+    create = await client.post("/sessions", json={"name": "s19"})
+    sid = create.json()["id"]
+
+    subagent_events = [
+        StreamEvent(
+            uuid="u1",
+            session_id="s1",
+            event={
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text"},
+            },
+            parent_tool_use_id="t_sub",
+        ),
+        StreamEvent(
+            uuid="u2",
+            session_id="s1",
+            event={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "subagent-secret"},
+            },
+            parent_tool_use_id="t_sub",
+        ),
+        StreamEvent(
+            uuid="u3",
+            session_id="s1",
+            event={"type": "content_block_stop", "index": 0},
+            parent_tool_use_id="t_sub",
+        ),
+    ]
+    script = [
+        *subagent_events,
+        *_text_block_stream(1, "main-content"),
+        _result_message(),
+    ]
+    original = _install_script(script)
+    try:
+        events = await _post_message_events(client, sid, "go")
+    finally:
+        _restore_init(original)
+
+    # No SSE event should contain the subagent text.
+    all_texts = [p.get("text", "") for _, p in events]
+    assert not any("subagent-secret" in t for t in all_texts)
+
+    # Main-thread delta must still appear.
+    delta_texts = [p.get("text", "") for t, p in events if t == "assistant.text.delta"]
+    assert "main-content" in delta_texts
+
+
+# 20 -----------------------------------------------------------------------
+async def test_streaming_atomic_fallback_when_streaming_off(
+    tmp_path, monkeypatch, patch_sdk
+):
+    monkeypatch.setenv("DA_AGENT_HOME", str(tmp_path))
+    s = Settings()
+    s.data_root = tmp_path
+    s.stream_responses = False
+    s.ensure_dirs()
+    a = create_app(s)
+    async with a.router.lifespan_context(a):
+        transport = httpx.ASGITransport(app=a)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            create = await c.post("/sessions", json={"name": "s20"})
+            sid = create.json()["id"]
+
+            script = [
+                _assistant(TextBlock(text="hi")),
+                _result_message(),
+            ]
+            original = _install_script(script)
+            try:
+                events = await _post_message_events(c, sid, "go")
+            finally:
+                _restore_init(original)
+
+    event_types = [t for t, _ in events]
+    assert "assistant.text" in event_types, (
+        "Atomic assistant.text must appear when streaming is off"
+    )
+    assert "assistant.text.delta" not in event_types, (
+        "No delta events when streaming is off"
+    )
+
+
+# 21 -----------------------------------------------------------------------
+async def test_streaming_suppresses_atomic_text_when_streamed(app, client):
+    create = await client.post("/sessions", json={"name": "s21"})
+    sid = create.json()["id"]
+
+    script = [
+        *_text_block_stream(0, "streamed-content"),
+        _assistant(TextBlock(text="should-not-emit")),
+        _result_message(),
+    ]
+    original = _install_script(script)
+    try:
+        events = await _post_message_events(client, sid, "go")
+    finally:
+        _restore_init(original)
+
+    event_types = [t for t, _ in events]
+    delta_events = [p for t, p in events if t == "assistant.text.delta"]
+    end_events = [p for t, p in events if t == "assistant.text.end"]
+
+    assert len(delta_events) == 1
+    assert len(end_events) == 1
+    assert "assistant.text" not in event_types, (
+        "Atomic assistant.text must be suppressed when streamed"
+    )
+
+    # Verify the delta carried the streamed text.
+    assert delta_events[0]["text"] == "streamed-content"
+
+
+# 22 -----------------------------------------------------------------------
+async def test_streaming_block_id_format(app, client):
+    create = await client.post("/sessions", json={"name": "s22"})
+    sid = create.json()["id"]
+
+    script = [
+        *_text_block_stream(0, "data"),
+        _result_message(),
+    ]
+    original = _install_script(script)
+    try:
+        events = await _post_message_events(client, sid, "go")
+    finally:
+        _restore_init(original)
+
+    delta_events = [p for t, p in events if t == "assistant.text.delta"]
+    assert delta_events, "Expected at least one delta event"
+    block_id = delta_events[0]["block_id"]
+    assert _BLOCK_ID_TEXT_RE.match(block_id), (
+        f"block_id {block_id!r} must match ^txt_[0-9a-f]{{12}}$"
+    )
+
+
+# 23 -----------------------------------------------------------------------
+async def test_streaming_per_turn_state_resets_between_turns(app, client):
+    create = await client.post("/sessions", json={"name": "s23"})
+    sid = create.json()["id"]
+
+    def _wait_end_before_first_delta(events):
+        types = [t for t, _ in events]
+        try:
+            first_delta_idx = types.index("assistant.text.delta")
+        except ValueError:
+            return False
+        return any(t == "wait.end" for t in types[:first_delta_idx])
+
+    # Turn 1 — install via __init__ hook; FakeClient is created on first send.
+    script_turn1 = [
+        *_text_block_stream(0, "turn1"),
+        _result_message(),
+    ]
+    original = _install_script(script_turn1)
+    try:
+        events1 = await _post_message_events(client, sid, "first")
+    finally:
+        _restore_init(original)
+
+    # Turn 2 — FakeClient already exists; update its script directly.
+    assert FakeClient.instances, (
+        "Expected at least one FakeClient instance after turn 1"
+    )
+    fc = FakeClient.instances[-1]
+    fc.script = [
+        *_text_block_stream(0, "turn2"),
+        _result_message(),
+    ]
+    events2 = await _post_message_events(client, sid, "second")
+
+    assert _wait_end_before_first_delta(events1), (
+        "Turn 1 must emit wait.end before first delta"
+    )
+    assert _wait_end_before_first_delta(events2), (
+        "Turn 2 must emit wait.end before first delta (state reset)"
+    )
+
+    deltas1 = [p["text"] for t, p in events1 if t == "assistant.text.delta"]
+    deltas2 = [p["text"] for t, p in events2 if t == "assistant.text.delta"]
+    assert "turn1" in deltas1
+    assert "turn2" in deltas2

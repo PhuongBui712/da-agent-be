@@ -726,6 +726,116 @@ sequenceDiagram
 
 ---
 
+### 8.6 Streaming Output (token-level)
+
+The agent surfaces partial assistant content via the SDK's `StreamEvent` channel
+(`include_partial_messages=True`). Goal: typing-cursor UX and sub-second
+time-to-first-byte for `assistant.text` / `assistant.thinking` blocks. Tool
+results, structured outputs, and `AskUserQuestion`/`ExitPlanMode` payloads are
+NOT streamed (see §8.3, §8.5).
+
+**Enablement.** `Settings.stream_responses: bool = True` (env `DA_AGENT_STREAM`).
+Set on `ClaudeAgentOptions` in `agent/core.py::_build_options`. When False, the
+backend falls back to atomic `assistant.text` / `assistant.thinking` SSE events
+(below). When the SDK suppresses `StreamEvent` (e.g. `max_thinking_tokens` is
+set), the same fallback path engages transparently.
+
+**Backend dispatch.** `agent/core.py::_render` adds a `StreamEvent` branch:
+
+| `event.type` | Action |
+|---|---|
+| `message_start` / `message_delta` / `message_stop` | no-op |
+| `content_block_start` (text \| thinking) | mint `block_id` (`txt_<12hex>` / `thk_<12hex>`); store in per-turn map keyed by SDK `index` |
+| `content_block_start` (tool_use) | buffer `tool_use_id`; no UI emit |
+| `content_block_delta` (`text_delta`) | `ui.on_text_delta(block_id, delta.text)` |
+| `content_block_delta` (`input_json_delta`) | drop in v1; reserved for `on_tool_input_delta` |
+| `content_block_stop` | `ui.on_text_end(block_id)` / `ui.on_thinking_end(block_id)` |
+
+**Suppression rule.** When at least one delta has fired for a content block,
+the eventual full `TextBlock` / `ThinkingBlock` in the trailing `AssistantMessage`
+is NOT re-rendered (no double `assistant.text`). The full `ToolUseBlock` always
+re-renders through `on_tool_use` — streaming is purely additive observability
+on tool input, never replaces the dispatch path. `_INTERACTIVE_TOOLS` ∪
+`TODO_TOOL_NAMES` filter (§8.4) applies unchanged.
+
+**Subagents (v1).** `StreamEvent.parent_tool_use_id != None` → drop. The full
+subagent `AssistantMessage` still renders into the subagent lane (UI-UX §7.6.1)
+via the existing `parent_tool_use_id` path. Token-level streaming inside the
+lane is deferred (see §14).
+
+**Wait label coordination.** `WebAgentUI` emits `wait.end` on the first
+`on_text_delta` of a turn; `wait.begin("Running <tool>")` resumes per
+`_render_block`. Anti-flicker invariant from §8.4 (begin_wait → todos.reset →
+empty snapshot) is preserved — the triplet runs before `client.query()`,
+streaming begins inside `receive_response()`.
+
+**`AgentUI` Protocol additions** (`ui/base.py`, all sync, mirror existing render
+methods):
+
+- `on_text_delta(block_id: str, delta: str) -> None`
+- `on_text_end(block_id: str) -> None`
+- `on_thinking_delta(block_id: str, delta: str) -> None`
+- `on_thinking_end(block_id: str) -> None`
+
+`block_id` is server-minted and opaque to the FE (`txt_<12hex>` / `thk_<12hex>`),
+generated at `content_block_start` and held in a per-turn `dict[int, str]` keyed
+by the SDK's `index`. Both `ConsoleAgentUI` and `WebAgentUI` MUST implement
+these methods. CLI prints deltas inline (no newline) and flushes on `*_end`;
+the existing 600-char thinking truncation moves into a buffered accumulator
+released on `on_thinking_end`.
+
+**SSE wire (replaces line 781 — see §11).**
+
+| Event | Payload |
+|---|---|
+| `assistant.text.delta` | `{block_id, text, parent_tool_use_id?}` |
+| `assistant.text.end` | `{block_id}` |
+| `assistant.thinking.delta` | `{block_id, text, parent_tool_use_id?}` |
+| `assistant.thinking.end` | `{block_id}` |
+| `assistant.text` (atomic) | fallback only, when streaming off |
+| `assistant.thinking` (atomic) | fallback only, when streaming off |
+
+`parent_tool_use_id` is reserved for v1.1 (subagent lane streaming); not present
+in v1 payloads. FE treats absent === null === main stream.
+
+**Sequencing guarantees.**
+
+1. `interaction.requested` cannot interleave with deltas — `can_use_tool` only
+   fires on the complete `ToolUseBlock`, which arrives after `content_block_stop`
+   for the preceding text block.
+2. `tool.result` always lands between two text blocks; chain detection
+   (UI-UX §7.2) is unaffected.
+3. No delta fires after `result` for that turn.
+
+**Per-turn event sequence example:**
+
+```
+wait.begin {label: "Thinking"}
+todos.snapshot {items: []}
+assistant.text.delta   {block_id: "txt_a1...", text: "Loading"}
+assistant.text.delta   {block_id: "txt_a1...", text: " the manifest…"}
+assistant.text.end     {block_id: "txt_a1..."}
+tool.use               {name: "Bash", input: {...}, depth: 0}
+wait.begin             {label: "Running Bash"}
+tool.result            {summary: "...", is_error: false}
+assistant.text.delta   {block_id: "txt_a2...", text: "Found 3 sheets."}
+assistant.text.end     {block_id: "txt_a2..."}
+result                 {turns, cost_usd, duration_s}
+wait.end
+```
+
+**Failure modes.**
+
+- Mid-stream FE disconnect → no replay; FE recovers via banner (UI-UX §6.4)
+  and treats the next delta with a fresh `block_id` as a new paragraph.
+- Server crash mid-turn → unchanged from today (turn lost).
+- SDK regression suppressing `StreamEvent` → atomic fallback engages
+  transparently (per-turn `_streamed_blocks` set stays empty).
+- Out-of-order or cross-block delta interleaving → SDK contract forbids; backend
+  logs and ignores any late delta.
+
+---
+
 ## 9. Frontend
 
 Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via SSE.
@@ -778,7 +888,7 @@ Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via S
 | GET  | `/kb/files/{kb_id}/versions` | List versions (`v2`, `v3`, …) with sidecar meta. |
 | GET  | `/kb/files/{kb_id}/versions/{version}/download` | Download a specific KB version (used as the download URL for `kind=kb_version` outputs). |
 
-**SSE event types** emitted on `POST /sessions/{id}/messages`: `assistant.text`, `assistant.thinking`, `tool.use`, `tool.result`, `system`, `result`, `interaction.requested`, `todos.snapshot`, `output.created`, `error`. Frontends MUST treat unknown event types as no-ops (forward-compat).
+**SSE event types** emitted on `POST /sessions/{id}/messages`: `assistant.text.delta`, `assistant.text.end`, `assistant.thinking.delta`, `assistant.thinking.end`, `assistant.text` (fallback), `assistant.thinking` (fallback), `tool.use`, `tool.result`, `system`, `result`, `interaction.requested`, `todos.snapshot`, `output.created`, `wait.begin`, `wait.end`, `error`. See §8.6 for streaming semantics. Frontends MUST treat unknown event types as no-ops (forward-compat).
 
 ---
 
@@ -818,3 +928,4 @@ Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via S
 - Attachment retention (§5.3, §8.5): attachments live for the session lifetime — do we need a per-attachment TTL or size-based eviction inside a long-running session?
 - KB status SSE channel (§8.5): should status transitions push to the chat screen so the checkbox un-greys without polling, or is FE-side polling sufficient?
 - Output retention (§8.2): cleanup policy for `~/.da-agent/outputs/` (already adjacent to the existing `versions/` cleanup question).
+- Subagent lane streaming (§8.6 + UI-UX §7.6.1): should token-level deltas with `parent_tool_use_id != None` render in the subagent lane in v1.1, or stay suppressed?

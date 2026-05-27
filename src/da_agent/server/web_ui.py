@@ -34,13 +34,19 @@ class WebAgentUI:
         self.session_id = session_id
         self._app_state = app_state
         self._stream: TurnStream | None = None
+        # Per-turn streaming bookkeeping (spec §8.6). `_text_delta_seen`
+        # latches True on the first text delta of a turn so we can clear
+        # the thinking wait label exactly once.
+        self._text_delta_seen: bool = False
 
     # --- stream binding (per turn) ------------------------------------- #
     def attach(self, stream: TurnStream) -> None:
         self._stream = stream
+        self._text_delta_seen = False
 
     def detach(self) -> None:
         self._stream = None
+        self._text_delta_seen = False
 
     def _emit(self, type_: str, **data: Any) -> None:
         stream = self._stream
@@ -56,7 +62,27 @@ class WebAgentUI:
         self._emit("assistant.thinking", text=text)
 
     def on_text(self, text: str) -> None:
+        # Atomic fallback path (streaming off OR a full TextBlock that never
+        # received a delta). Streaming-on path goes through on_text_delta.
         self._emit("assistant.text", text=text)
+
+    # --- token-level streaming (spec §8.6) ---------------------------- #
+    def on_text_delta(self, block_id: str, delta: str) -> None:
+        if not self._text_delta_seen:
+            # First text delta of the turn -> clear the "Thinking" wait
+            # label so the FE caret takes over (spec §8.6).
+            self._text_delta_seen = True
+            self._emit("wait.end")
+        self._emit("assistant.text.delta", block_id=block_id, text=delta)
+
+    def on_text_end(self, block_id: str) -> None:
+        self._emit("assistant.text.end", block_id=block_id)
+
+    def on_thinking_delta(self, block_id: str, delta: str) -> None:
+        self._emit("assistant.thinking.delta", block_id=block_id, text=delta)
+
+    def on_thinking_end(self, block_id: str) -> None:
+        self._emit("assistant.thinking.end", block_id=block_id)
 
     def on_tool_use(
         self, name: str, tool_input: dict[str, Any], *, depth: int = 0
