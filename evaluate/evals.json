@@ -1,0 +1,591 @@
+{
+  "eval_name": "DAA_Evaluation_Suite",
+  "version": "1.0.0",
+  "description": "Complete evaluation suite for the Data Analyst Agent (DAA)",
+  "agent_stack": "Claude Agent SDK",
+  "default_config": {
+    "max_turns": 30,
+    "max_tokens": 80000,
+    "n_trials": 3,
+    "grader_model": "claude-sonnet-4-20250514",
+    "grader_temperature": 0,
+    "grader_runs_per_trial": 3
+  },
+
+  "suites": {
+    "suite_a_operations": {
+      "description": "Data extraction, aggregation, and manipulation tasks. Agent should answer directly without triggering the full DA process.",
+      "tasks": [
+        {
+          "id": "ops_extract_001",
+          "description": "Extract a single value: UOB Net Interest Income FY2023",
+          "input": {
+            "excel_file": "test_data/real/240826-UOB_Financial_Review.xlsx",
+            "user_prompt": "What is UOB's Net Interest Income for FY2023?"
+          },
+          "graders": [
+            {
+              "type": "code_value_match",
+              "field": "answer_value",
+              "expected": 9679,
+              "tolerance": 1.0,
+              "unit": "S$m"
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"],
+              "reason": "Simple extraction should NOT trigger DA process"
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_extract_002",
+          "description": "Extract a single value: UBS Net Fee and Commission Income FY2024",
+          "input": {
+            "excel_file": "test_data/real/250304-UBS_Review_4Q2024__SY_.xlsx",
+            "user_prompt": "What was UBS's net fee and commission income in FY2024?"
+          },
+          "graders": [
+            {
+              "type": "code_value_match",
+              "field": "answer_value",
+              "expected": 26138,
+              "tolerance": 1.0,
+              "unit": "USD million"
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_calc_003",
+          "description": "Calculate YoY growth: UBS NFCI FY2023→FY2024",
+          "input": {
+            "excel_file": "test_data/real/250304-UBS_Review_4Q2024__SY_.xlsx",
+            "user_prompt": "Calculate the YoY growth rate of UBS's net fee and commission income from FY2023 to FY2024."
+          },
+          "graders": [
+            {
+              "type": "code_value_match",
+              "field": "answer_value",
+              "expected": 0.2118,
+              "tolerance": 0.005,
+              "note": "~21.18% growth"
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_calc_004",
+          "description": "Calculate YoY growth: Alibaba Revenue FY2024→FY2025",
+          "input": {
+            "excel_file": "test_data/real/Alibaba_4Q2025_Review_-_16May2025.xlsx",
+            "user_prompt": "What is Alibaba's revenue YoY growth rate from FY2024 to FY2025?"
+          },
+          "graders": [
+            {
+              "type": "code_value_match",
+              "field": "answer_value",
+              "expected": 0.0586,
+              "tolerance": 0.005,
+              "note": "~5.86% growth"
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_extract_005",
+          "description": "Extract from specific sheet: Straits Trading tin mining revenue FY2023",
+          "input": {
+            "excel_file": "test_data/real/Straits_Trading_FY2023_Result_-20240322.xlsx",
+            "user_prompt": "What was Straits Trading's tin mining and smelting revenue in FY2023?"
+          },
+          "graders": [
+            {
+              "type": "code_value_match",
+              "field": "answer_value",
+              "expected": 424844,
+              "tolerance": 10,
+              "unit": "$'000"
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_agg_006",
+          "description": "Aggregate: Total revenue across all months (synthetic)",
+          "input": {
+            "excel_file": "test_data/synthetic/syn_simple_summary.xlsx",
+            "user_prompt": "What is the total revenue across all months in the Monthly sheet?"
+          },
+          "graders": [
+            {
+              "type": "code_value_match",
+              "field": "answer_value",
+              "expected": 349851.48,
+              "tolerance": 5.0
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_filter_007",
+          "description": "Filter and count rows: Orders from North region (synthetic)",
+          "input": {
+            "excel_file": "test_data/synthetic/syn_revenue_drop.xlsx",
+            "user_prompt": "How many orders are from the North region?"
+          },
+          "graders": [
+            {
+              "type": "code_value_match",
+              "field": "answer_value",
+              "expected_ref": "syn_north_order_count",
+              "tolerance": 0
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_multisheet_008",
+          "description": "Cross-sheet extraction: List all sheet names in UOB file",
+          "input": {
+            "excel_file": "test_data/real/240826-UOB_Financial_Review.xlsx",
+            "user_prompt": "List all sheet names in this Excel file."
+          },
+          "graders": [
+            {
+              "type": "code_contains_all",
+              "expected_strings": ["Cover", "P&L", "BS", "Segments_Biz", "Segments_Geo", "Loans", "Writeoff", "NPL", "CAR", "Share Info"],
+              "case_sensitive": false
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_compare_009",
+          "description": "Simple comparison: Which is larger, UOB NII FY2022 vs FY2023?",
+          "input": {
+            "excel_file": "test_data/real/240826-UOB_Financial_Review.xlsx",
+            "user_prompt": "Was UOB's net interest income higher in FY2022 or FY2023?"
+          },
+          "graders": [
+            {
+              "type": "code_contains_all",
+              "expected_strings": ["FY2023", "9679"],
+              "case_sensitive": false
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "ops_cleaning_010",
+          "description": "Identify data quality issues in messy data",
+          "input": {
+            "excel_file": "test_data/synthetic/syn_messy_data.xlsx",
+            "user_prompt": "How many duplicate rows and how many null values in the revenue column are in the Raw Data sheet? Ignore the first header row."
+          },
+          "graders": [
+            {
+              "type": "code_value_match",
+              "field": "duplicate_count",
+              "expected": 15,
+              "tolerance": 0
+            },
+            {
+              "type": "code_value_match",
+              "field": "null_count",
+              "expected": 20,
+              "tolerance": 0
+            },
+            {
+              "type": "code_transcript",
+              "assert_absent": ["EnterPlanMode"]
+            }
+          ],
+          "tracked_metrics": ["n_turns", "n_total_tokens", "latency"]
+        }
+      ]
+    },
+
+    "suite_b_analysis": {
+      "description": "Full data analysis tasks. Agent MUST trigger the complete DA process with all 6 phases.",
+      "tasks": [
+        {
+          "id": "analysis_revenue_drop_001",
+          "description": "Root cause analysis: identify why Q3 revenue dropped (synthetic). Known causes: South region -69% in Q3, Paid channel -30% in Q3.",
+          "input": {
+            "excel_file": "test_data/synthetic/syn_revenue_drop.xlsx",
+            "user_prompt": "Revenue seems to have dropped significantly in Q3 2024 compared to Q2. Can you analyze what's driving this decline?"
+          },
+          "ground_truth": {
+            "root_causes": [
+              "South region experienced ~69% revenue decline in Q3 vs Q2",
+              "Paid channel saw ~30% decline in Q3 vs Q2"
+            ],
+            "q3_vs_q2_drop_pct": -0.1891,
+            "south_q3_vs_q2_drop_pct": -0.6881
+          },
+          "graders": [
+            {
+              "type": "code_phase_gate",
+              "required_phases": ["business_understanding", "data_understanding", "cleaning", "analysis", "synthesis", "delivery"],
+              "required_calls": ["EnterPlanMode"],
+              "max_hypotheses": 3
+            },
+            {
+              "type": "model_rubric",
+              "rubric_file": "config/grader_rubrics/analysis_revenue_drop.md",
+              "dimensions": ["root_cause_identification", "insight_quality", "recommendation_specificity", "quantitative_rigor", "executive_summary"],
+              "pass_threshold": {
+                "root_cause_identification": 3,
+                "recommendation_specificity": 3
+              }
+            },
+            {
+              "type": "model_assertion",
+              "assertions": [
+                "The agent identified the South region as a primary driver of the Q3 decline",
+                "The agent identified the Paid channel as a contributing factor to the Q3 decline",
+                "The agent provided at least 2 specific, actionable recommendations"
+              ]
+            }
+          ],
+          "scoring_weights": {
+            "code_phase_gate": 0.15,
+            "root_cause_identification": 0.25,
+            "insight_quality": 0.20,
+            "recommendation_specificity": 0.20,
+            "quantitative_rigor": 0.10,
+            "executive_summary": 0.10
+          },
+          "tracked_metrics": ["n_turns", "n_toolcalls", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "analysis_ubs_post_cs_002",
+          "description": "Analyze UBS profitability trajectory post-Credit Suisse acquisition",
+          "input": {
+            "excel_file": "test_data/real/250304-UBS_Review_4Q2024__SY_.xlsx",
+            "user_prompt": "Analyze UBS's financial performance and profitability trend after the Credit Suisse acquisition. What segments are driving growth and which are dragging? What's the outlook?"
+          },
+          "ground_truth": {
+            "key_insights": [
+              "Total revenues grew significantly post-acquisition (FY2023→FY2024)",
+              "Global Wealth Management is the largest and growing segment",
+              "Personal & Corporate Banking benefited from CS integration",
+              "Net fee and commission income grew ~21% YoY",
+              "CET1 capital ratio changed post-acquisition"
+            ]
+          },
+          "graders": [
+            {
+              "type": "code_phase_gate",
+              "required_phases": ["business_understanding", "data_understanding", "cleaning", "analysis", "synthesis", "delivery"],
+              "required_calls": ["EnterPlanMode"],
+              "max_hypotheses": 3
+            },
+            {
+              "type": "model_rubric",
+              "rubric_file": "config/grader_rubrics/analysis_general_financial.md",
+              "dimensions": ["root_cause_identification", "insight_quality", "recommendation_specificity", "quantitative_rigor", "executive_summary"],
+              "pass_threshold": {
+                "insight_quality": 3,
+                "quantitative_rigor": 3
+              }
+            }
+          ],
+          "scoring_weights": {
+            "code_phase_gate": 0.15,
+            "root_cause_identification": 0.25,
+            "insight_quality": 0.20,
+            "recommendation_specificity": 0.20,
+            "quantitative_rigor": 0.10,
+            "executive_summary": 0.10
+          },
+          "tracked_metrics": ["n_turns", "n_toolcalls", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "analysis_baba_segments_003",
+          "description": "Analyze Alibaba segment-level revenue growth: which segments drive, which drag",
+          "input": {
+            "excel_file": "test_data/real/Alibaba_4Q2025_Review_-_16May2025.xlsx",
+            "user_prompt": "Analyze Alibaba's revenue growth at the segment level. Which segments are the growth engines and which are underperforming? Are there any concerning trends?"
+          },
+          "ground_truth": {
+            "key_insights": [
+              "Overall revenue grew ~5.9% YoY (FY2025 vs FY2024)",
+              "International Digital Commerce is the fastest-growing segment (~29% YoY)",
+              "Cloud Intelligence growing ~11% YoY - recovery trend",
+              "Taobao and Tmall largest segment but growing slowly (~3.4%)",
+              "Some segments were divested (Sun Art, Intime)"
+            ]
+          },
+          "graders": [
+            {
+              "type": "code_phase_gate",
+              "required_phases": ["business_understanding", "data_understanding", "cleaning", "analysis", "synthesis", "delivery"],
+              "required_calls": ["EnterPlanMode"],
+              "max_hypotheses": 3
+            },
+            {
+              "type": "model_rubric",
+              "rubric_file": "config/grader_rubrics/analysis_general_financial.md",
+              "dimensions": ["root_cause_identification", "insight_quality", "recommendation_specificity", "quantitative_rigor", "executive_summary"],
+              "pass_threshold": {
+                "insight_quality": 3,
+                "quantitative_rigor": 3
+              }
+            }
+          ],
+          "scoring_weights": {
+            "code_phase_gate": 0.15,
+            "root_cause_identification": 0.25,
+            "insight_quality": 0.20,
+            "recommendation_specificity": 0.20,
+            "quantitative_rigor": 0.10,
+            "executive_summary": 0.10
+          },
+          "tracked_metrics": ["n_turns", "n_toolcalls", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "analysis_st_loss_004",
+          "description": "Investigate why Straits Trading reported a net loss in FY2023",
+          "input": {
+            "excel_file": "test_data/real/Straits_Trading_FY2023_Result_-20240322.xlsx",
+            "user_prompt": "Straits Trading reported a net loss in FY2023 after a large profit in FY2022. Can you do a deep-dive analysis to understand what happened?"
+          },
+          "ground_truth": {
+            "key_insights": [
+              "FY2022 profit was inflated by a one-time gain from disposal of ARA",
+              "Revenue declined ~6.8% driven by lower tin mining revenue (-10.1%)",
+              "Property revenue grew (+21.4%) but not enough to offset",
+              "Net loss of ~S$12.1 million vs net profit of S$569.7 million in FY2022",
+              "Gearing ratio increased from 60.8% to 72.8%"
+            ]
+          },
+          "graders": [
+            {
+              "type": "code_phase_gate",
+              "required_phases": ["business_understanding", "data_understanding", "cleaning", "analysis", "synthesis", "delivery"],
+              "required_calls": ["EnterPlanMode"],
+              "max_hypotheses": 3
+            },
+            {
+              "type": "model_rubric",
+              "rubric_file": "config/grader_rubrics/analysis_general_financial.md",
+              "dimensions": ["root_cause_identification", "insight_quality", "recommendation_specificity", "quantitative_rigor", "executive_summary"],
+              "pass_threshold": {
+                "root_cause_identification": 3,
+                "recommendation_specificity": 3
+              }
+            }
+          ],
+          "scoring_weights": {
+            "code_phase_gate": 0.15,
+            "root_cause_identification": 0.25,
+            "insight_quality": 0.20,
+            "recommendation_specificity": 0.20,
+            "quantitative_rigor": 0.10,
+            "executive_summary": 0.10
+          },
+          "tracked_metrics": ["n_turns", "n_toolcalls", "n_total_tokens", "latency"]
+        },
+        {
+          "id": "analysis_uob_asset_quality_005",
+          "description": "Analyze UOB's asset quality trend across NPL, writeoffs, and coverage ratios",
+          "input": {
+            "excel_file": "test_data/real/240826-UOB_Financial_Review.xlsx",
+            "user_prompt": "Analyze UOB's asset quality across the years. Look at NPLs, write-offs, and coverage ratios. Are there any concerning trends or sectors?"
+          },
+          "ground_truth": {
+            "key_insights": [
+              "Total NPL has been trending up (2882 in FY2015 to 5060 in FY2022)",
+              "NPL ratio relatively stable around 1.5-1.6%",
+              "Building and construction NPL grew significantly",
+              "Greater China NPL volatile - rose 67% YoY",
+              "Coverage ratio has improved in recent years"
+            ]
+          },
+          "graders": [
+            {
+              "type": "code_phase_gate",
+              "required_phases": ["business_understanding", "data_understanding", "cleaning", "analysis", "synthesis", "delivery"],
+              "required_calls": ["EnterPlanMode"],
+              "max_hypotheses": 3
+            },
+            {
+              "type": "model_rubric",
+              "rubric_file": "config/grader_rubrics/analysis_general_financial.md",
+              "dimensions": ["root_cause_identification", "insight_quality", "recommendation_specificity", "quantitative_rigor", "executive_summary"],
+              "pass_threshold": {
+                "insight_quality": 3,
+                "quantitative_rigor": 3
+              }
+            }
+          ],
+          "scoring_weights": {
+            "code_phase_gate": 0.15,
+            "root_cause_identification": 0.25,
+            "insight_quality": 0.20,
+            "recommendation_specificity": 0.20,
+            "quantitative_rigor": 0.10,
+            "executive_summary": 0.10
+          },
+          "tracked_metrics": ["n_turns", "n_toolcalls", "n_total_tokens", "latency"]
+        }
+      ]
+    },
+
+    "suite_c_routing": {
+      "description": "Tests whether the agent correctly routes between simple operations and full analysis. Balanced: 50% should trigger analysis, 50% should not.",
+      "tasks": [
+        {
+          "id": "route_simple_001",
+          "expected_route": "operations",
+          "input": {
+            "excel_file": "test_data/real/240826-UOB_Financial_Review.xlsx",
+            "user_prompt": "What's the total revenue for FY2023?"
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_absent": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_simple_002",
+          "expected_route": "operations",
+          "input": {
+            "excel_file": "test_data/real/Alibaba_4Q2025_Review_-_16May2025.xlsx",
+            "user_prompt": "Show me the first 5 rows of the P&L sheet."
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_absent": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_simple_003",
+          "expected_route": "operations",
+          "input": {
+            "excel_file": "test_data/synthetic/syn_revenue_drop.xlsx",
+            "user_prompt": "How many unique customers are in the Orders sheet?"
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_absent": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_simple_004",
+          "expected_route": "operations",
+          "input": {
+            "excel_file": "test_data/real/250304-UBS_Review_4Q2024__SY_.xlsx",
+            "user_prompt": "What was UBS's CET1 ratio in FY2024?"
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_absent": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_simple_005",
+          "expected_route": "operations",
+          "input": {
+            "excel_file": "test_data/real/Straits_Trading_FY2023_Result_-20240322.xlsx",
+            "user_prompt": "List all business segments and their FY2023 revenue."
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_absent": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_analysis_001",
+          "expected_route": "analysis",
+          "input": {
+            "excel_file": "test_data/real/240826-UOB_Financial_Review.xlsx",
+            "user_prompt": "Analyze UOB's profitability trend and identify the key drivers of change."
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_present": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_analysis_002",
+          "expected_route": "analysis",
+          "input": {
+            "excel_file": "test_data/real/250304-UBS_Review_4Q2024__SY_.xlsx",
+            "user_prompt": "Can you investigate what's driving UBS's revenue composition changes post-CS acquisition?"
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_present": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_analysis_003",
+          "expected_route": "analysis",
+          "input": {
+            "excel_file": "test_data/synthetic/syn_revenue_drop.xlsx",
+            "user_prompt": "Something seems off with our Q3 numbers. Please do a thorough analysis to find out what happened."
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_present": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_analysis_004",
+          "expected_route": "analysis",
+          "input": {
+            "excel_file": "test_data/real/Alibaba_4Q2025_Review_-_16May2025.xlsx",
+            "user_prompt": "I'm concerned about Alibaba's growth trajectory. Can you deep-dive into segment performance and identify risks?"
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_present": ["EnterPlanMode"]}
+          ]
+        },
+        {
+          "id": "route_analysis_005",
+          "expected_route": "analysis",
+          "input": {
+            "excel_file": "test_data/real/Straits_Trading_FY2023_Result_-20240322.xlsx",
+            "user_prompt": "Why did the company swing from profit to loss? Analyze the root causes."
+          },
+          "graders": [
+            {"type": "code_transcript", "assert_present": ["EnterPlanMode"]}
+          ]
+        }
+      ]
+    },
+
+    "suite_d_regression": {
+      "description": "Graduated tasks from other suites with near-100% expected pass rate. Initially empty — populated as tasks graduate from Suites A-C.",
+      "tasks": []
+    }
+  }
+}
