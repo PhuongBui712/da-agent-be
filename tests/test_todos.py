@@ -302,10 +302,10 @@ class _FakeUI:
     def on_text(self, t):
         pass
 
-    def on_tool_use(self, n, i, *, depth=0):
+    def on_tool_use(self, n, i, *, depth=0, tool_use_id=None):
         pass
 
-    def on_tool_result(self, s, *, is_error=False, depth=0):
+    def on_tool_result(self, s, *, is_error=False, depth=0, tool_use_id=None):
         pass
 
     def on_system(self, st, d):

@@ -59,11 +59,11 @@ class FakeUI:
     def on_thinking_end(self, block_id):
         self._rec("thinking_end", block_id)
 
-    def on_tool_use(self, n, i, *, depth=0):
-        self._rec("tool_use", n, depth)
+    def on_tool_use(self, n, i, *, depth=0, tool_use_id=None):
+        self._rec("tool_use", n, depth, tool_use_id)
 
-    def on_tool_result(self, s, *, is_error=False, depth=0):
-        self._rec("tool_result", is_error, depth)
+    def on_tool_result(self, s, *, is_error=False, depth=0, tool_use_id=None):
+        self._rec("tool_result", is_error, depth, tool_use_id)
 
     def on_system(self, st, d):
         self._rec("system", st)
@@ -143,7 +143,7 @@ def test_render_tool_result_depth_and_error():
     r._render_tool_result(
         ToolResultBlock(tool_use_id="t", content="oops", is_error=True), depth=1
     )
-    assert ui.calls[-1] == ("tool_result", True, 1)
+    assert ui.calls[-1] == ("tool_result", True, 1, "t")
 
 
 def test_tool_result_list_content():
@@ -155,7 +155,7 @@ def test_tool_result_list_content():
         is_error=False,
     )
     r._render_tool_result(block, depth=0)
-    assert ui.calls[-1] == ("tool_result", False, 0)
+    assert ui.calls[-1] == ("tool_result", False, 0, "t")
 
 
 # --------------------------------------------------------------------------- #

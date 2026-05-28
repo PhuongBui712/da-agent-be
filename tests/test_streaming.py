@@ -62,10 +62,10 @@ class RecordingUI:
     def on_thinking_end(self, block_id):
         self._rec("thinking_end", block_id)
 
-    def on_tool_use(self, n, i, *, depth=0):
+    def on_tool_use(self, n, i, *, depth=0, tool_use_id=None):
         self._rec("tool_use", n, depth)
 
-    def on_tool_result(self, s, *, is_error=False, depth=0):
+    def on_tool_result(self, s, *, is_error=False, depth=0, tool_use_id=None):
         self._rec("tool_result", is_error, depth)
 
     def on_system(self, st, d):
