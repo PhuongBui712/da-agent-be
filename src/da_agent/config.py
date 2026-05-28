@@ -57,6 +57,20 @@ class Settings:
         default_factory=lambda: _bool_env("DA_AGENT_STREAM", True)
     )
 
+    # Spec §5.3 — short-term attachment hard cap. Server returns 413 above this.
+    attachment_max_bytes: int = field(
+        default_factory=lambda: _int_env_default(
+            "DA_AGENT_ATTACHMENT_MAX_BYTES", 100 * 1024 * 1024
+        )
+    )
+
+    # Spec §8.5 — soft warn threshold for assembled `<scope>` block size.
+    scope_warn_bytes: int = field(
+        default_factory=lambda: _int_env_default(
+            "DA_AGENT_SCOPE_WARN_BYTES", 256 * 1024
+        )
+    )
+
     # --- filesystem ---
     project_root: Path = field(default_factory=find_project_root)
     data_root: Path = field(
@@ -80,11 +94,28 @@ class Settings:
         return self.data_root / "sessions"
 
     @property
+    def outputs_dir(self) -> Path:
+        """Spec §4 / §8.2 — registered standalone outputs."""
+        return self.data_root / "outputs"
+
+    @property
+    def attachments_dir(self) -> Path:
+        """Spec §4 / §5.3 — short-term per-session attachments."""
+        return self.data_root / "attachments"
+
+    @property
     def skills_dir(self) -> Path:
         return self.project_root / ".claude" / "skills"
 
     def ensure_dirs(self) -> None:
-        for d in (self.data_root, self.kb_dir, self.workspace_dir, self.sessions_dir):
+        for d in (
+            self.data_root,
+            self.kb_dir,
+            self.workspace_dir,
+            self.sessions_dir,
+            self.outputs_dir,
+            self.attachments_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -98,3 +129,10 @@ def _bool_env(name: str, default: bool) -> bool:
 def _int_env(name: str) -> int | None:
     raw = os.getenv(name)
     return int(raw) if raw and raw.strip().isdigit() else None
+
+
+def _int_env_default(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw and raw.strip().lstrip("-").isdigit():
+        return int(raw)
+    return default
