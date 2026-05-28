@@ -33,8 +33,20 @@ class SessionListResponse(BaseModel):
 
 
 # --- Messages --------------------------------------------------------- #
+class AttachmentRef(BaseModel):
+    """Wire ref used in MessageRequest body (spec §8.5)."""
+    attachment_id: str
+
+
 class MessageRequest(BaseModel):
+    """Spec §8.5 — `prompt` is required; `kb_scope` and `attachments` are optional.
+
+    `kb_scope=None`/missing → default-all READY KBs.
+    `kb_scope=[]` → 400 (forces explicit per §8.5 validation table).
+    """
     prompt: str = Field(min_length=1)
+    kb_scope: list[str] | None = None
+    attachments: list[AttachmentRef] = Field(default_factory=list)
 
 
 # --- Interactions ----------------------------------------------------- #
