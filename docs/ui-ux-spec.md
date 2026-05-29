@@ -204,7 +204,7 @@ Left sidebar persistent qua mọi screen. Nội dung từ trên xuống:
 
 ### 6.2 Message stream
 
-Scrollable container, full-width plain typography (no message bubbles). Mỗi message item render theo type với 5 rules ở §7. Stream được populate từ SSE events trên `POST /sessions/{id}/messages` [§11]:
+Scrollable container, full-width plain typography (no message bubbles). Mỗi message item render theo type với 5 rules ở §7. Stream được populate từ SSE events trên `POST /sessions/{id}/messages` [§11]; cùng các event types này được reuse cho history replay qua `GET /sessions/{sid}/messages` (§9.6), với caveat tool calls thuộc `_INTERACTIVE_TOOLS = {AskUserQuestion, ExitPlanMode} ∪ TODO_TOOL_NAMES` bị filter ra khỏi payload replay (mirror live-runner suppression):
 
 | SSE event | Render rule |
 |---|---|
@@ -605,6 +605,19 @@ Khi reconnect mid-modal, banner "You have an unanswered question from the agent.
 ### 9.5 Sequential queue
 
 Nếu nhiều `interaction.requested` đến gần nhau (vd backend re-park sau validation fail), FE keep một in-memory FIFO queue và render từng modal một. Modal đang mở phải resolve (submit hoặc dismiss) trước khi modal tiếp theo open. UI cue: badge "1 of 2 pending" ở header modal khi queue có >1 item [§8.3 edge case "Two interactions queued back-to-back"].
+
+### 9.6 Reopen — load chat history
+
+Khi user click một session đã tồn tại trên left sidebar, hoặc khi FE mount và `activeSessionId` resolve sang một id sẵn có, FE phải reconstruct scrollback của các turn trước.
+
+- **Mount semantics:** `<ChatView key={activeSessionId}/>` được key theo session id, nên React unmount/remount component trên mỗi lần switch. `useReducer` re-init từ `initialChatStreamState` → scrollback bắt đầu sạch, không lo state leak giữa session cũ và session mới.
+- **Hydration effect:** trong `useSseStream`, một `useEffect([sid])` gọi `Sessions.getSessionHistory(sid)` → `GET /sessions/{sid}/messages` [§11]. Response có shape `{events: SseEvent[]}`; FE iterate từng event và `dispatch` qua `streamReducer` y hệt như khi nhận live stream. Kết quả: prior turns render giống hệt lúc chúng stream lần đầu.
+- **Wire-format identity:** replay events có cùng wire shape như live SSE events (xem bảng §6.2). Reducer KHÔNG phân biệt được live vs replay — đây là design intent, mục tiêu zero render-code divergence giữa hai path.
+- **Concurrent effects:** parked-interactions hydration (§9.4) vẫn chạy song song trên cùng một mount. Cả hai effect cùng converge về một reducer state — modal chưa trả lời hiện lại đồng thời với scrollback của các turn đã hoàn thành.
+- **Silent failure:** nếu GET fail (network error, BE mới install, JSONL chưa tồn tại, v.v.), effect catch và bỏ qua — user thấy scrollback rỗng. Đây là fallback đúng cho session brand-new; live stream errors vẫn surface qua path `send` bình thường.
+- **What replay omits:** tool calls có name thuộc `_INTERACTIVE_TOOLS = {AskUserQuestion, ExitPlanMode} ∪ TODO_TOOL_NAMES` bị BE filter khỏi payload replay (xem §6.2 và `agent/core.py`). Lý do: các surface tương ứng (modal §9, todo overlay §10.4) replay state qua parked-interactions hook và `todos.snapshot` riêng, không qua tool steps.
+- **Synthetic boundaries:** BE chèn synthetic `result` event giữa các user-prompt boundary và ở cuối transcript, để reducer flip `inToolChain=false` và mark thinking blocks `done` (auto-collapse theo §7.1). Không có synthetic này, thinking từ turn cuối sẽ ở lại expanded sau khi history load.
+- **Race window (known limitation):** SDK flush JSONL bất đồng bộ. Nếu user click lại đúng session đó trong vòng vài giây sau khi turn vừa kết thúc, trailing `assistant.text` block của turn cuối có thể chưa kịp xuất hiện trong replay payload. Trong thực tế user revisit session muộn hơn nhiều — document đây là known limitation, không phải feature; không có UI mitigation ở MVP.
 
 ---
 
