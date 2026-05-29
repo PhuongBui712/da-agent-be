@@ -41,11 +41,12 @@ def build_subagents() -> dict[str, AgentDefinition]:
         ),
         "visualizer": AgentDefinition(
             description="Produces charts, pivot tables, and new summary sheets from "
-            "analysis results, written to the workspace as .xlsx.",
+            "analysis results, registered as a downloadable .xlsx output.",
             prompt=(
                 "You turn analysis results into clear deliverables: charts, pivot tables, "
                 "and summary sheets. Use the xlsx skill. Keep spreadsheets formula-driven "
-                "and free of formula errors. Report the output file path."
+                "and free of formula errors. Write to the resolved output target path "
+                "supplied by the AskUserQuestion tool_result and report that path."
             ),
             tools=_READWRITE,
             skills=["xlsx"],

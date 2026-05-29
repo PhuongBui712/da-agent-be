@@ -30,7 +30,7 @@ from ..config import Settings
 from ..outputs import OutputDetection, OutputsObserver
 from ..ui.base import AgentUI
 from .events import PlanDecision, QuestionRequest, QuestionResponse
-from .permissions import make_can_use_tool
+from .permissions import ResolveTarget, make_can_use_tool
 from .prompts import build_system_prompt
 from .subagents import build_subagents
 from .todos import TodoStore, TODO_TOOL_NAMES
@@ -63,6 +63,7 @@ class AgentRunner:
         *,
         on_output_detection: Callable[[OutputDetection], None] | None = None,
         resume_sdk_session_id: str | None = None,
+        resolve_target: ResolveTarget | None = None,
     ):
         self.ui = ui
         self.settings = settings or Settings()
@@ -75,6 +76,11 @@ class AgentRunner:
         # session. Captured from `SystemMessage(init)` and persisted on
         # SessionMeta by the route layer (server/routes/messages.py).
         self._resume_sdk_session_id = resume_sdk_session_id
+        # Spec §8.2 — when supplied, validates AskUserQuestion (Target, Source)
+        # pairs and injects `resolved_target_path` into the tool_result.
+        # CLI passes None (no path resolution); web wires a closure that has
+        # access to the per-session state.
+        self._resolve_target = resolve_target
         # Spec §8.2 — observe Write/Edit/Bash tool calls and surface detected
         # writes under outputs_dir/<id>/ or kb_dir/<kb_id>/versions/. CLI passes
         # no callback (`on_output_detection=None`) and the observer becomes a
@@ -82,6 +88,7 @@ class AgentRunner:
         self._outputs_observer = OutputsObserver(
             outputs_dir=self.settings.outputs_dir,
             kb_dir=self.settings.kb_dir,
+            attachments_dir=self.settings.attachments_dir,
             on_detect=on_output_detection or (lambda _det: None),
         )
         # Per-turn streaming state. Reset in `send`.
@@ -115,6 +122,7 @@ class AgentRunner:
             ask_plan=self._ask_plan,
             on_approved=self._on_plan_approved,
             ask_question=self._ask_question,
+            resolve_target=self._resolve_target,
         )
         env = dict(os.environ)
         # Keep SDK session JSONL under the tool's own data dir.
@@ -136,7 +144,6 @@ class AgentRunner:
             max_turns=s.max_turns,
             add_dirs=[
                 str(s.kb_dir),
-                str(s.workspace_dir),
                 str(s.outputs_dir),
                 str(s.attachments_dir),
             ],
