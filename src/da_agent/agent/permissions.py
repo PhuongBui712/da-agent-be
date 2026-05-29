@@ -8,12 +8,19 @@ two built-in tools that need a human:
 - **ExitPlanMode**: when the agent finishes planning we surface the plan for approval
   and, on accept, relax the permission mode.
 
-Everything else is allowed (this is a trusted, single-user local tool; all steps are
-still shown in the TUI for transparency).
+Spec §8.2 — when the question's first sub-question carries `header == "Target"`,
+the web path additionally validates the (Target, Source) pair, rotates the
+previous `v_curr` to `v_prev` for KB/attachment writes, and returns the
+resolved absolute write path inside `updated_input` so the model writes to it
+verbatim. CLI usage passes `resolve_target=None` and skips that hop.
+
+Everything else is allowed (this is a trusted, single-user local tool; all steps
+are still shown in the TUI for transparency).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from claude_agent_sdk import (
@@ -30,10 +37,42 @@ AskPlan = Callable[[str], Awaitable[PlanDecision]]
 AskQuestion = Callable[[QuestionRequest], Awaitable[QuestionResponse]]
 
 
+@dataclass(slots=True)
+class TargetResolution:
+    """Result of (Target, Source) validation + path resolution (spec §8.2)."""
+
+    resolved_target_path: str
+    resolved_target_kind: str  # "standalone" | "kb_version" | "attachment_version"
+
+
+@dataclass(slots=True)
+class TargetValidationError(Exception):
+    """Raised by a `resolve_target` callback when the (Target, Source) pair
+    fails validation per spec §8.2 line 367. The message is surfaced verbatim
+    to the model in `PermissionResultDeny`.
+    """
+
+    message: str
+
+    def __str__(self) -> str:
+        return self.message
+
+
+# A resolver receives the raw question payload from the SDK plus the user's
+# selected labels and returns the resolved absolute path + kind. Raise
+# `TargetValidationError` to surface a deny back to the model.
+ResolveTarget = Callable[
+    [list[dict[str, Any]], list[dict[str, Any]]],
+    Awaitable[TargetResolution | None],
+]
+
+
 def make_can_use_tool(
     ask_plan: AskPlan,
     on_approved: OnPlanApproved,
     ask_question: AskQuestion,
+    *,
+    resolve_target: ResolveTarget | None = None,
 ):
     async def can_use_tool(
         tool_name: str,
@@ -41,7 +80,9 @@ def make_can_use_tool(
         context: ToolPermissionContext,
     ):
         if tool_name == "AskUserQuestion":
-            return await _handle_ask_user_question(tool_input, ask_question)
+            return await _handle_ask_user_question(
+                tool_input, ask_question, resolve_target
+            )
         if tool_name == "ExitPlanMode":
             return await _handle_exit_plan_mode(tool_input, ask_plan, on_approved)
         return PermissionResultAllow()
@@ -52,29 +93,67 @@ def make_can_use_tool(
 async def _handle_ask_user_question(
     tool_input: dict[str, Any],
     ask_question: AskQuestion,
-) -> PermissionResultAllow:
+    resolve_target: ResolveTarget | None,
+):
     """Drive the UI for the model's questions and return answers via `updated_input`.
 
     The built-in AskUserQuestion tool reads `updated_input.answers` (a mapping of
     question text -> selected label string) as the user's response, so the SDK can
     short-circuit its own prompt and pass the answer straight to the model.
+
+    Spec §8.2 path-resolution: if the first question carries `header == "Target"`
+    AND a `resolve_target` callback was supplied, validate the (Target, Source)
+    pair and inject `resolved_target_path` + `resolved_target_kind` into
+    `updated_input` so the model writes to the correct disk location.
     """
     raw_questions = list(tool_input.get("questions") or [])
     request = QuestionRequest.from_tool_input(tool_input)
     response = await ask_question(request)
 
     answers: dict[str, str] = {}
+    raw_answers: list[dict[str, Any]] = []
     for i, q_dict in enumerate(raw_questions):
         key = q_dict.get("question") or q_dict.get("header") or f"Q{i + 1}"
         if i < len(response.answers):
             ans = response.answers[i]
             answers[key] = ", ".join(ans.values())
+            raw_answers.append(
+                {
+                    "header": q_dict.get("header", ""),
+                    "selected": list(ans.values()),
+                }
+            )
         else:
             answers[key] = ""
+            raw_answers.append({"header": q_dict.get("header", ""), "selected": []})
 
-    return PermissionResultAllow(
-        updated_input={"questions": raw_questions, "answers": answers}
-    )
+    updated_input: dict[str, Any] = {
+        "questions": raw_questions,
+        "answers": answers,
+    }
+
+    if resolve_target is not None and _is_output_target_question(raw_questions):
+        try:
+            resolution = await resolve_target(raw_questions, raw_answers)
+        except TargetValidationError as exc:
+            return PermissionResultDeny(message=str(exc), interrupt=False)
+        if resolution is not None:
+            updated_input["resolved_target_path"] = resolution.resolved_target_path
+            updated_input["resolved_target_kind"] = resolution.resolved_target_kind
+
+    return PermissionResultAllow(updated_input=updated_input)
+
+
+def _is_output_target_question(raw_questions: list[dict[str, Any]]) -> bool:
+    """Detect the spec §8.2 output-target chain by header convention.
+
+    First question MUST carry `header == "Target"`. We deliberately fence on
+    the literal English string (set by the prompt) so non-output questions —
+    arbitrary clarifications the model raises — are not mis-routed.
+    """
+    if not raw_questions:
+        return False
+    return raw_questions[0].get("header") == "Target"
 
 
 async def _handle_exit_plan_mode(
