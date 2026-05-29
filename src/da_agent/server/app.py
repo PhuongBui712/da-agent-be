@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -23,6 +24,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # AgentRunner sets CLAUDE_CONFIG_DIR on the SDK subprocess so JSONL
+        # transcripts land under settings.sessions_dir. The session-history
+        # reader (`claude_agent_sdk.get_session_messages`) runs in THIS
+        # parent process and reads CLAUDE_CONFIG_DIR from `os.environ`, so
+        # we mirror the same value while the app is running and restore on
+        # exit -- otherwise concurrent test fixtures with different
+        # tmp_paths would leak the last-set value across the process.
+        prev_config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(settings.sessions_dir)
         state = AppState(settings)
         await state.registry.load()
         await state.kb.load()
@@ -32,6 +42,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await state.shutdown()
+            if prev_config_dir is None:
+                os.environ.pop("CLAUDE_CONFIG_DIR", None)
+            else:
+                os.environ["CLAUDE_CONFIG_DIR"] = prev_config_dir
 
     app = FastAPI(title="DA-Agent", lifespan=lifespan)
     app.add_middleware(
