@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>da-agent — Mockup Chat (SSE replay)</title>
+
+  <!-- Tailwind v3 Play CDN (no build step needed) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Inter / JetBrains Mono / Space Grotesk — same as the real FE -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Lucide icons (same icon set as the real FE) -->
+  <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+
+  <script>
+    // Bring Tailwind config closer to the real FE's @theme block.
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              black: "#0d0f12",
+              "dark-gray": "#1a1e24",
+              border: "#e2e8f0",
+              accent: "#3b82f6",
+              teal: "#0d9488",
+              purple: "#7c3aed",
+            },
+          },
+          fontFamily: {
+            sans: ['"Inter"', "ui-sans-serif", "system-ui", "sans-serif"],
+            mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+            display: ['"Space Grotesk"', "sans-serif"],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    html, body { height: 100%; }
+    body {
+      background: #f8fafc;
+      color: #1e293b;
+      font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Custom scrollbar — same look as the real FE */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.3);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.5); }
+
+    /* Modal-style mount animation referenced in the React code */
+    @keyframes fade-in   { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes slide-in  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in  { animation: fade-in 200ms ease-out; }
+    .animate-slide-in { animation: slide-in 220ms ease-out; }
+
+    /* Markdown helpers */
+    .md-table { border-collapse: collapse; }
+    .md-table th, .md-table td { border: 1px solid #e2e8f0; }
+  </style>
+</head>
+
+<body class="overflow-hidden">
+
+  <!-- =====================================================================
+       Outer 3-pane shell (Sidebar | Chat workspace | Right panel)
+       Mirrors src/App.tsx layout from da-agent-fe.
+       ===================================================================== -->
+  <div class="flex h-screen w-screen overflow-hidden bg-slate-50">
+
+    <!-- ===== Sidebar (visual only, no interactivity) ===== -->
+    <aside class="w-64 bg-white border-r border-slate-200 h-screen shrink-0 flex flex-col">
+      <div class="p-5 border-b border-slate-100 flex items-center gap-3">
+        <div class="h-9 w-9 bg-slate-900 rounded-lg flex items-center justify-center">
+          <i data-lucide="brain" class="h-5 w-5 text-slate-100"></i>
+        </div>
+        <div>
+          <div class="font-semibold text-slate-800 tracking-tight text-sm">da-agent</div>
+          <div class="text-xs text-slate-500 font-medium">Excel data analyst</div>
+        </div>
+      </div>
+
+      <div class="p-4">
+        <button class="w-full bg-[#0d0f12] hover:bg-slate-800 text-white font-medium text-sm py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors">
+          <i data-lucide="plus" class="h-4 w-4"></i>
+          New session
+        </button>
+      </div>
+
+      <nav class="px-3 space-y-1">
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 text-slate-900 text-sm font-medium">
+          <i data-lucide="message-square" class="h-4 w-4"></i> Chat
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="database" class="h-4 w-4"></i> Knowledge
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="file-code" class="h-4 w-4"></i> Outputs
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="settings" class="h-4 w-4"></i> Settings
+        </a>
+      </nav>
+
+      <div class="px-4 mt-6">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 px-1">Sessions</div>
+        <div class="space-y-0.5">
+          <div class="bg-slate-50 text-slate-950 font-semibold border-l-2 border-slate-900 pl-2.5 py-1.5 text-xs truncate">
+            Mockup chat replay
+          </div>
+          <div class="text-slate-500 hover:text-slate-900 hover:bg-slate-50 px-2.5 py-1.5 text-xs truncate">
+            Sales Q1 analysis
+          </div>
+          <div class="text-slate-500 hover:text-slate-900 hover:bg-slate-50 px-2.5 py-1.5 text-xs truncate">
+            Schema review · sess_bb8cb…
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-auto p-4 border-t border-slate-100 text-[10px] text-slate-400 font-mono">
+        sess_bb8cb98cd73a4308
+      </div>
+    </aside>
+
+    <!-- ===== Chat workspace (the focal area) ===== -->
+    <section class="flex-1 flex flex-col h-full bg-[#f8fafc] border-r border-slate-200 min-w-0">
+
+      <!-- Header bar -->
+      <header class="h-16 border-b border-slate-200 bg-white px-6 flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-3 min-w-0">
+          <span id="conn-dot" class="h-2 w-2 rounded-full bg-amber-500 animate-pulse" title="connecting"></span>
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-800 text-sm tracking-tight truncate">Mockup chat replay</div>
+            <div class="text-[11px] text-slate-500 font-medium font-mono truncate">sess_bb8cb98cd73a4308 · model: claude-sonnet-4-6</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="stream-status" class="text-[11px] text-slate-500 font-medium">idle</span>
+          <button id="replay-btn"
+                  class="px-3 py-1.5 text-xs font-bold rounded-lg bg-[#0d0f12] hover:bg-slate-800 text-white flex items-center gap-1.5 transition-colors">
+            <i data-lucide="rotate-ccw" class="h-3.5 w-3.5"></i>
+            Replay stream
+          </button>
+        </div>
+      </header>
+
+      <!-- Conversation feed: messages get appended into #feed -->
+      <div id="feed" class="flex-1 overflow-y-auto px-8 py-6 space-y-6">
+        <!-- empty until JS pushes events -->
+      </div>
+
+      <!-- Composer (read-only, mockup) -->
+      <div class="px-8 py-5 bg-white border-t border-slate-200">
+        <div class="border border-slate-300 hover:border-slate-400 focus-within:ring-1 focus-within:ring-slate-400 bg-white rounded-2xl px-4 py-3 flex items-end gap-3 shadow-xs">
+          <textarea
+            class="flex-1 resize-none bg-transparent outline-none text-[13px] text-slate-800 placeholder-slate-400 font-medium"
+            rows="2"
+            placeholder="(mockup) gõ một prompt ở đây — replay bằng nút trên header"
+            disabled></textarea>
+          <button class="bg-[#0d0f12] text-white hover:bg-slate-800 transition-colors h-9 w-9 rounded-lg flex items-center justify-center shrink-0 shadow-xs"
+                  disabled>
+            <i data-lucide="send" class="h-4 w-4"></i>
+          </button>
+        </div>
+        <div class="mt-2 flex items-center justify-between">
+          <div class="text-[11px] text-slate-400 font-medium">
+            Data scope: <span class="font-mono text-slate-500">no KB files in scope</span>
+          </div>
+          <div class="text-[11px] text-slate-400 font-medium">
+            Enter to send · Shift+Enter newline
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ===== Right analytics panel ===== -->
+    <aside class="w-80 bg-white border-l border-slate-200 shrink-0 p-6 space-y-6 overflow-y-auto">
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Data scope</div>
+        <div class="rounded-xl border border-slate-200 bg-slate-50/40 p-3 text-xs text-slate-500 font-medium">
+          No KB files attached to this turn. Default-all behavior.
+        </div>
+      </div>
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Attachments</div>
+        <div class="rounded-xl border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-400 font-medium text-center">
+          Drop files (mockup, disabled)
+        </div>
+      </div>
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Todos</div>
+        <div id="todos-card" class="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500 font-medium">
+          (empty — turn produced no todos)
+        </div>
+      </div>
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Result</div>
+        <div id="result-card" class="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500 font-medium">
+          (waiting…)
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- =====================================================================
+       Mockup data + replay engine + render functions.
+       The screen is built up purely from these events — nothing is
+       statically rendered into the feed.
+       ===================================================================== -->
+  <script>
+  (function () {
+    "use strict";
+
+    /* ----------------------------------------------------------------- *
+     *  1. Mockup SSE payload — slice replayed when the page loads.
+     *     Order required: user.prompt → thinking → text → 6 tool calls
+     *     (use+result paired) → result.
+     *     Content based on /home/phuong/working/csan/da-agent-fe/data/mockup_sse.txt
+     *     The 6 tool calls are synthetic filler (the original turn had
+     *     zero tool.use events), realistic for a code-exploration chain.
+     * ----------------------------------------------------------------- */
+    var MOCKUP_EVENTS = [
+      {
+        type: "user.prompt",
+        text: "Hãy thinking 10 lần về vấn đề này trước khi trả lời: con gà có trước hay quả trứng có trước",
+      },
+
+      {
+        type: "assistant.thinking",
+        text:
+          "The user is asking the classic philosophical question — \"which came first, the chicken or the egg?\" — and explicitly wants me to think about it 10 times.\n\n" +
+          "Thought 1: From a strict evolutionary lens, the egg came first. A near-chicken bird laid an egg whose zygote carried the mutation that defined the first true chicken.\n" +
+          "Thought 2: It depends on how we define \"chicken egg\". Is it an egg that contains a chicken, or an egg laid by a chicken?\n" +
+          "Thought 3: Genetically, a chicken's DNA is fixed at fertilization, inside the egg — not when it hatches.\n" +
+          "Thought 4: Phylogenetically, eggs as a reproductive structure predate chickens by hundreds of millions of years.\n" +
+          "Thought 5: If \"egg\" must be a chicken egg specifically, the boundary depends on how we draw the species line.\n" +
+          "Thought 6: Cosmologically, the question is a simple causal-loop puzzle — the loop has no head once you accept gradual change.\n" +
+          "Thought 7: Linguistically, \"con gà\" in Vietnamese leans toward the bird itself, biasing the answer toward \"egg first\".\n" +
+          "Thought 8: Metaphorically the question is used for chicken-and-egg dependency problems in software design.\n" +
+          "Thought 9: Pragmatically, scientists overwhelmingly side with \"egg first\".\n" +
+          "Thought 10: The most defensible answer is therefore: the egg — but I should acknowledge the linguistic/definitional ambiguity.",
+      },
+
+      {
+        type: "assistant.text",
+        text:
+          "# Con gà có trước hay quả trứng có trước?\n\n" +
+          "Tôi đã suy nghĩ qua **10 góc nhìn** khác nhau — dưới đây là tổng hợp cô đọng.\n\n" +
+          "## Bảng so sánh nhanh\n\n" +
+          "| # | Góc nhìn | Kết luận |\n" +
+          "|---|----------|----------|\n" +
+          "| 1 | **Tiến hoá học** | Đột biến xảy ra ở thời điểm thụ tinh → **trứng trước** |\n" +
+          "| 2 | **Định nghĩa** | Mơ hồ: trứng-do-gà-đẻ vs trứng-chứa-gà |\n" +
+          "| 3 | **Di truyền học** | DNA gà cố định bên trong trứng → **trứng trước** |\n" +
+          "| 4 | **Phát sinh chủng loài** | Trứng (cấu trúc sinh sản) có hàng trăm triệu năm trước gà |\n" +
+          "| 5 | **Triết học** | Vòng nhân quả tan biến khi chấp nhận tiến hoá liên tục |\n\n" +
+          "## Kết luận\n\n" +
+          "Câu trả lời chặt chẽ nhất theo khoa học: **quả trứng có trước** — vì biến dị di truyền hình thành ở thời điểm thụ tinh, và \"trứng\" như một cấu trúc sinh sản ra đời rất lâu trước khi loài gà tiến hoá.\n\n" +
+          "> Tuy nhiên, nếu bạn định nghĩa \"trứng gà\" là trứng *do gà đẻ ra*, thì câu trả lời ngược lại — và đó cũng là lý do câu hỏi này nổi tiếng: nó là một bài tập về **cách định nghĩa**, không phải về sự thật.",
+      },
+
+      // ---- 6 tool calls forming a single chain ----
+      { type: "tool.use", tool_use_id: "toolu_01R", name: "Read",
+        input: { file_path: "/home/phuong/working/csan/da-agent-be/src/da_agent/agent/core.py" }, depth: 0 },
+      { type: "tool.result", tool_use_id: "toolu_01R",
+        summary: "312 lines. AgentRunner class — owns SDK lifecycle, streaming dispatch, render handoff to AgentUI Protocol; integrates TodoStore + OutputsObserver.",
+        is_error: false, depth: 0 },
+
+      { type: "tool.use", tool_use_id: "toolu_02G", name: "Grep",
+        input: { pattern: "can_use_tool", path: "src/" }, depth: 0 },
+      { type: "tool.result", tool_use_id: "toolu_02G",
+        summary: "8 matches across 3 files: agent/core.py (5), agent/permissions.py (2), __init__.py (1). Used as the single permission gate before every tool dispatch.",
+        is_error: false, depth: 0 },
+
+      { type: "tool.use", tool_use_id: "toolu_03X", name: "Glob",
+        input: { pattern: "**/*.py", path: "src/da_agent" }, depth: 0 },
+      { type: "tool.result", tool_use_id: "toolu_03X",
+        summary: "Found 23 Python files: agent/{core,events,permissions,prompts,subagents,todos}.py, server/{app,state,sse,web_ui,scope,attachments_registry,schemas}.py, kb/{registry,manifest,preprocess,runner}.py, outputs/{registry,observer}.py, ui/{base,console,prompts}.py, plus cli.py / config.py / __main__.py.",
+        is_error: false, depth: 0 },
+
+      { type: "tool.use", tool_use_id: "toolu_04R", name: "Read",
+        input: { file_path: "/home/phuong/working/csan/da-agent-be/src/da_agent/server/app.py" }, depth: 0 },
+      { type: "tool.result", tool_use_id: "toolu_04R",
+        summary: "187 lines. create_app(settings) factory — builds AppState, mounts routers (sessions, messages, interactions, kb, attachments, outputs), CORS, /health endpoint, lifespan handler.",
+        is_error: false, depth: 0 },
+
+      { type: "tool.use", tool_use_id: "toolu_05B", name: "Bash",
+        input: { command: "cd /home/phuong/working/csan/da-agent-be && uv run pytest -q --tb=short 2>&1 | tail -5" }, depth: 0 },
+      { type: "tool.result", tool_use_id: "toolu_05B",
+        summary: "165 passed in 4.21s. All SSE wire-format assertions green. Smoke walkthrough completed cleanly against in-process FakeClient.",
+        is_error: false, depth: 0 },
+
+      { type: "tool.use", tool_use_id: "toolu_06R", name: "Read",
+        input: { file_path: "/home/phuong/working/csan/da-agent-be/docs/ui-ux-spec.md" }, depth: 0 },
+      { type: "tool.result", tool_use_id: "toolu_06R",
+        summary: "3-pane shell (sidebar / chat / right panel). Tool chain card — collapsible list, pill EXECUTING → TURN_COMPLETED. SSE event taxonomy mapped to UI components per spec §11.",
+        is_error: false, depth: 0 },
+
+      { type: "result", turns: 1, cost_usd: 0.116109, duration_s: 37.846 },
+    ];
+
+    /* ----------------------------------------------------------------- *
+     *  2. Inline SVG icon helper — Lucide UMD provides createIcons().
+     * ----------------------------------------------------------------- */
+    function refreshIcons() {
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons();
+      }
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  3. Tiny markdown renderer (subset: # ## ###, **bold**, `code`,
+     *     fenced ``` blocks, GFM tables, '> ' blockquote, '- ' lists).
+     *     Just enough to render the assistant.text payload faithfully.
+     * ----------------------------------------------------------------- */
+    function escapeHtml(s) {
+      return s.replace(/[&<>"]/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+      });
+    }
+    function renderInline(s) {
+      s = escapeHtml(s);
+      // inline code first (so bold inside backticks is escaped intact)
+      s = s.replace(/`([^`]+)`/g,
+        '<code class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-800 font-mono text-[11px] border border-slate-200">$1</code>');
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<span class="font-semibold text-slate-950">$1</span>');
+      s = s.replace(/\*([^*]+)\*/g, '<em class="italic">$1</em>');
+      return s;
+    }
+    function renderMarkdown(md) {
+      var lines = md.split("\n");
+      var html = "";
+      var i = 0;
+      while (i < lines.length) {
+        var line = lines[i];
+
+        // fenced code block
+        if (/^```/.test(line)) {
+          var lang = line.replace(/^```/, "").trim() || "code";
+          i++;
+          var codeBuf = [];
+          while (i < lines.length && !/^```/.test(lines[i])) {
+            codeBuf.push(lines[i]);
+            i++;
+          }
+          if (i < lines.length) i++; // consume closing ```
+          html +=
+            '<div class="border border-slate-200 rounded-xl overflow-hidden my-3 bg-zinc-950 shadow-sm max-w-2xl">' +
+              '<div class="flex items-center justify-between px-4 py-2 bg-zinc-900 border-b border-zinc-900">' +
+                '<span class="font-mono text-[9px] text-zinc-400 font-bold tracking-wider uppercase">' + escapeHtml(lang) + '</span>' +
+                '<span class="text-[9px] text-zinc-500 font-mono">code</span>' +
+              '</div>' +
+              '<pre class="p-3.5 overflow-x-auto"><code class="font-mono text-xs text-emerald-400 whitespace-pre leading-relaxed">' +
+              escapeHtml(codeBuf.join("\n")) +
+              '</code></pre>' +
+            '</div>';
+          continue;
+        }
+
+        // table — header row + separator + body rows
+        if (/^\|/.test(line) && i + 1 < lines.length && /^\|\s*[-: |]+\|\s*$/.test(lines[i + 1])) {
+          var head = line.split("|").slice(1, -1).map(function (c) { return c.trim(); });
+          i += 2;
+          var rows = [];
+          while (i < lines.length && /^\|/.test(lines[i])) {
+            rows.push(lines[i].split("|").slice(1, -1).map(function (c) { return c.trim(); }));
+            i++;
+          }
+          html +=
+            '<div class="w-full overflow-x-auto my-3 border border-slate-200 rounded-xl bg-white shadow-xs"><table class="md-table w-full text-xs">' +
+              '<thead class="bg-slate-50 border-b border-slate-200"><tr>' +
+                head.map(function (c) {
+                  return '<th class="px-4 py-2.5 font-semibold text-[11px] uppercase tracking-wider text-slate-500 text-left">' + renderInline(c) + '</th>';
+                }).join("") +
+              '</tr></thead>' +
+              '<tbody>' +
+                rows.map(function (r) {
+                  return '<tr class="hover:bg-slate-50/40">' + r.map(function (c) {
+                    return '<td class="px-4 py-2 text-slate-600 font-medium align-top">' + renderInline(c) + '</td>';
+                  }).join("") + '</tr>';
+                }).join("") +
+              '</tbody>' +
+            '</table></div>';
+          continue;
+        }
+
+        // headings
+        var h3 = line.match(/^###\s+(.*)$/);
+        if (h3) {
+          html += '<div class="text-xs font-bold uppercase tracking-wider text-slate-400 mt-4 mb-2 flex items-center gap-1.5">' +
+                  '<span class="w-1 h-3.5 bg-slate-800 rounded-full"></span>' + renderInline(h3[1]) + '</div>';
+          i++; continue;
+        }
+        var h2 = line.match(/^##\s+(.*)$/);
+        if (h2) {
+          html += '<h2 class="text-[15px] font-bold text-slate-900 mt-4 mb-2 tracking-tight">' + renderInline(h2[1]) + '</h2>';
+          i++; continue;
+        }
+        var h1 = line.match(/^#\s+(.*)$/);
+        if (h1) {
+          html += '<h1 class="text-lg font-bold text-slate-900 mt-3 mb-3 tracking-tight font-display">' + renderInline(h1[1]) + '</h1>';
+          i++; continue;
+        }
+
+        // blockquote
+        if (/^>\s?/.test(line)) {
+          var quote = [];
+          while (i < lines.length && /^>\s?/.test(lines[i])) {
+            quote.push(lines[i].replace(/^>\s?/, ""));
+            i++;
+          }
+          html += '<blockquote class="border-l-2 border-slate-300 pl-3 py-1 my-3 text-xs text-slate-600 font-medium italic">' +
+                  renderInline(quote.join(" ")) + '</blockquote>';
+          continue;
+        }
+
+        // bullet list
+        if (/^- /.test(line)) {
+          var items = [];
+          while (i < lines.length && /^- /.test(lines[i])) {
+            items.push(lines[i].replace(/^- /, ""));
+            i++;
+          }
+          html += '<ul class="list-disc pl-5 my-2 space-y-1 text-slate-700">' +
+                  items.map(function (it) { return '<li class="text-xs font-medium">' + renderInline(it) + '</li>'; }).join("") +
+                  '</ul>';
+          continue;
+        }
+
+        // blank line
+        if (/^\s*$/.test(line)) { i++; continue; }
+
+        // paragraph
+        var paraBuf = [];
+        while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^[#>|`-]/.test(lines[i])) {
+          paraBuf.push(lines[i]);
+          i++;
+        }
+        html += '<p class="text-slate-600 text-xs md:text-sm font-medium leading-relaxed">' +
+                renderInline(paraBuf.join(" ")) + '</p>';
+      }
+      return html;
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  4. Render helpers — append DOM nodes per event type.
+     * ----------------------------------------------------------------- */
+    var feed = document.getElementById("feed");
+    var statusEl = document.getElementById("stream-status");
+    var connDot = document.getElementById("conn-dot");
+    var resultCard = document.getElementById("result-card");
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      var dotClass = "h-2 w-2 rounded-full ";
+      if (kind === "open")       dotClass += "bg-emerald-500";
+      else if (kind === "live")  dotClass += "bg-emerald-500 animate-pulse";
+      else if (kind === "error") dotClass += "bg-rose-500";
+      else                       dotClass += "bg-amber-500 animate-pulse";
+      connDot.className = dotClass;
+    }
+
+    function appendNode(html) {
+      var div = document.createElement("div");
+      div.className = "animate-slide-in";
+      div.innerHTML = html;
+      feed.appendChild(div);
+      refreshIcons();
+      feed.scrollTop = feed.scrollHeight;
+      return div;
+    }
+
+    // strip <scope>…</scope><user_prompt>…</user_prompt> wrapper if present
+    function stripScopeWrap(text) {
+      var m = text.match(/<user_prompt>\s*([\s\S]*?)\s*<\/user_prompt>/);
+      return m ? m[1] : text;
+    }
+
+    function renderUserPrompt(ev) {
+      var text = stripScopeWrap(ev.text || "");
+      appendNode(
+        '<div class="flex flex-col items-end ml-auto w-full max-w-3xl">' +
+          '<div class="bg-[#f1f5f9] border border-slate-200 hover:border-slate-300 text-slate-900 rounded-2xl px-5 py-3 shadow-xs max-w-md">' +
+            '<div class="text-[13px] font-medium leading-relaxed">' + escapeHtml(text) + '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    function renderThinkingBlock(ev) {
+      var lines = ev.text.split("\n").filter(function (l) { return l.trim() !== ""; });
+      var preview = lines.slice(0, 3).map(function (l) {
+        return '<li class="flex gap-2.5 items-start text-xs font-semibold text-slate-700 leading-relaxed">' +
+                 '<span class="text-slate-400 font-bold">' + (lines.indexOf(l) + 1) + '.</span>' +
+                 '<span>' + escapeHtml(l) + '</span>' +
+               '</li>';
+      }).join("");
+      var hiddenCount = Math.max(0, lines.length - 3);
+
+      var node = appendNode(
+        '<div class="w-full max-w-2xl font-sans text-slate-700 select-none">' +
+          '<div data-th-toggle class="flex items-center justify-between text-xs text-slate-500 hover:text-slate-800 cursor-pointer font-semibold py-1.5 transition-colors">' +
+            '<div class="flex items-center gap-2">' +
+              '<span class="h-2 w-2 rounded-full bg-blue-500"></span>' +
+              '<span class="font-sans text-slate-600 font-semibold">Thought process · 10 góc nhìn</span>' +
+            '</div>' +
+            '<div class="flex items-center gap-1">' +
+              '<span data-th-label class="text-[10px] font-sans text-slate-400">Hide process</span>' +
+              '<i data-lucide="chevron-up" data-th-chevron class="h-3.5 w-3.5"></i>' +
+            '</div>' +
+          '</div>' +
+          '<div data-th-body class="mt-2.5 ml-1 pl-4 border-l border-slate-200 relative space-y-3 pt-1 pb-2">' +
+            '<div class="absolute -left-[11px] -top-1 bg-[#f8fafc]">' +
+              '<span class="h-5 w-5 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center">' +
+                '<i data-lucide="clock" class="h-3 w-3 text-slate-500"></i>' +
+              '</span>' +
+            '</div>' +
+            '<div class="text-xs text-slate-500 font-medium pl-2.5 italic leading-relaxed">' +
+              'Đang phân tích câu hỏi cổ điển từ 10 góc nhìn khác nhau trước khi trả lời…' +
+            '</div>' +
+            '<ol class="space-y-2 pl-2.5">' + preview + '</ol>' +
+            (hiddenCount > 0 ?
+              '<button data-th-more class="text-[11px] font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1 pl-2.5">' +
+                '<i data-lucide="chevron-down" class="h-3 w-3"></i>' +
+                'Show ' + hiddenCount + ' more steps' +
+              '</button>' : '') +
+            '<div class="flex items-center gap-2 pl-2.5 pt-1.5 border-t border-slate-100 mt-2">' +
+              '<span class="h-4 w-4 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center">' +
+                '<i data-lucide="check" class="h-3 w-3"></i>' +
+              '</span>' +
+              '<span class="text-xs font-bold text-slate-800">Done</span>' +
+              '<span class="text-[10px] font-mono font-bold text-slate-400 bg-slate-100/50 px-1.5 py-0.5 border border-slate-200 rounded">2.1s</span>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="w-full h-px bg-slate-200/50 my-2"></div>'
+      );
+
+      // toggle handler
+      var toggle = node.querySelector("[data-th-toggle]");
+      var body = node.querySelector("[data-th-body]");
+      var label = node.querySelector("[data-th-label]");
+      toggle.addEventListener("click", function () {
+        var hidden = body.classList.toggle("hidden");
+        label.textContent = hidden ? "Show process" : "Hide process";
+      });
+    }
+
+    function renderAssistantText(ev) {
+      appendNode(
+        '<div class="flex flex-col items-start mr-auto w-full max-w-3xl">' +
+          '<div class="space-y-3 text-slate-800 max-w-full font-sans">' +
+            renderMarkdown(ev.text) +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  Tool chain coalescence — incoming `tool.use` events that arrive
+     *  back-to-back attach to the same chain card; `tool.result` flips
+     *  per-row status. Replays UI-UX §6.2 behavior.
+     * ----------------------------------------------------------------- */
+    var currentChain = null;        // DOM node of the currently-open chain
+    var currentChainBody = null;    // .tc-body container
+    var currentChainCount = 0;
+    var currentChainStatusPill = null;
+    var currentChainHeaderTitle = null;
+
+    function getToolIcon(name) {
+      var n = (name || "").toLowerCase();
+      if (n.indexOf("read") !== -1)  return "file-text";
+      if (n.indexOf("write") !== -1) return "pencil";
+      if (n.indexOf("edit") !== -1)  return "pencil";
+      if (n.indexOf("grep") !== -1)  return "search";
+      if (n.indexOf("glob") !== -1)  return "folder-search";
+      if (n.indexOf("bash") !== -1 || n.indexOf("shell") !== -1) return "terminal";
+      if (n.indexOf("xlsx") !== -1 || n.indexOf("excel") !== -1) return "file-spreadsheet";
+      if (n.indexOf("task") !== -1 || n.indexOf("todo") !== -1)  return "check-circle";
+      return "layers";
+    }
+
+    function startChainIfNeeded() {
+      if (currentChain) return;
+      var node = appendNode(
+        '<div class="flex flex-col items-start mr-auto w-full max-w-3xl">' +
+          '<div class="border border-slate-200 rounded-xl bg-[#f8fafc] shadow-xs overflow-hidden w-full">' +
+            '<div class="px-4 py-2.5 bg-slate-100/80 border-b border-slate-200 flex items-center justify-between cursor-pointer select-none">' +
+              '<div class="flex items-center gap-2 min-w-0">' +
+                '<i data-lucide="terminal" class="h-4 w-4 text-slate-500 shrink-0"></i>' +
+                '<span data-tc-title class="text-xs font-semibold text-slate-700 truncate">Running 0 diagnostic commands…</span>' +
+                '<span data-tc-pill class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-600 border border-sky-200 ml-1">EXECUTING</span>' +
+              '</div>' +
+              '<div class="flex items-center gap-1 text-slate-400 shrink-0">' +
+                '<span class="text-[10px] font-semibold">Collapse steps</span>' +
+                '<i data-lucide="chevron-up" class="h-4 w-4"></i>' +
+              '</div>' +
+            '</div>' +
+            '<div data-tc-body class="p-3 bg-white space-y-2.5 divide-y divide-slate-100"></div>' +
+          '</div>' +
+        '</div>'
+      );
+      currentChain = node;
+      currentChainBody = node.querySelector("[data-tc-body]");
+      currentChainStatusPill = node.querySelector("[data-tc-pill]");
+      currentChainHeaderTitle = node.querySelector("[data-tc-title]");
+      currentChainCount = 0;
+    }
+
+    function previewInput(input) {
+      try {
+        if (!input) return "";
+        if (input.file_path) return input.file_path;
+        if (input.command)   return input.command;
+        if (input.pattern)   return input.pattern + (input.path ? " · " + input.path : "");
+        return JSON.stringify(input);
+      } catch (e) { return ""; }
+    }
+    function truncate(s, n) { return s && s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+    function renderToolUse(ev) {
+      startChainIfNeeded();
+      currentChainCount += 1;
+      currentChainHeaderTitle.textContent =
+        "Running " + currentChainCount + " diagnostic command" + (currentChainCount === 1 ? "" : "s") + "…";
+
+      var icon = getToolIcon(ev.name);
+      var preview = truncate(previewInput(ev.input), 60);
+
+      var row = document.createElement("div");
+      row.className = "tc-row pt-2.5 first:pt-0";
+      row.setAttribute("data-tc-id", ev.tool_use_id);
+      row.innerHTML =
+        '<div data-tc-head class="flex items-center justify-between cursor-pointer group">' +
+          '<div class="flex items-center gap-2 min-w-0">' +
+            '<span class="h-7 w-7 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">' +
+              '<i data-lucide="' + icon + '" class="h-3.5 w-3.5 text-indigo-500"></i>' +
+            '</span>' +
+            '<span class="font-semibold text-slate-800 text-xs">' + escapeHtml(ev.name) + '</span>' +
+            (preview ? '<span class="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-500 truncate max-w-[260px]">' + escapeHtml(preview) + '</span>' : '') +
+          '</div>' +
+          '<div class="flex items-center gap-2 shrink-0">' +
+            '<span data-tc-status class="flex items-center justify-center">' +
+              '<i data-lucide="loader-2" class="h-3.5 w-3.5 text-blue-500 animate-spin"></i>' +
+            '</span>' +
+            '<i data-lucide="chevron-down" class="h-3.5 w-3.5 text-slate-400 group-hover:text-slate-600"></i>' +
+          '</div>' +
+        '</div>' +
+        '<div data-tc-detail class="ml-9 pt-2 mt-2 border-t border-slate-100 hidden space-y-3">' +
+          '<div>' +
+            '<div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono mb-1">Input</div>' +
+            '<pre class="p-3 bg-zinc-950 text-slate-200 rounded-lg font-mono text-[10px] leading-relaxed overflow-x-auto">' +
+            escapeHtml(JSON.stringify(ev.input || {}, null, 2)) + '</pre>' +
+          '</div>' +
+          '<div data-tc-result-slot></div>' +
+        '</div>';
+      currentChainBody.appendChild(row);
+
+      // wire toggle
+      var head = row.querySelector("[data-tc-head]");
+      var detail = row.querySelector("[data-tc-detail]");
+      head.addEventListener("click", function () { detail.classList.toggle("hidden"); });
+
+      refreshIcons();
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function renderToolResult(ev) {
+      if (!currentChain) return;
+      var row = currentChainBody.querySelector('[data-tc-id="' + ev.tool_use_id + '"]');
+      if (!row) return;
+
+      // status icon
+      var statusEl = row.querySelector("[data-tc-status]");
+      if (ev.is_error) {
+        statusEl.innerHTML =
+          '<span class="h-4 w-4 rounded-full bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center font-bold">✕</span>';
+      } else {
+        statusEl.innerHTML =
+          '<span class="h-4 w-4 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center font-bold">✓</span>';
+      }
+
+      var slot = row.querySelector("[data-tc-result-slot]");
+      slot.innerHTML =
+        '<div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono mb-1">Result</div>' +
+        '<div class="p-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-mono text-xs leading-relaxed">' +
+        escapeHtml(ev.summary || "") + '</div>';
+
+      refreshIcons();
+    }
+
+    function closeChainIfOpen() {
+      if (!currentChain) return;
+      currentChainStatusPill.className =
+        "text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 ml-1";
+      currentChainStatusPill.textContent = "TURN_COMPLETED";
+      currentChainHeaderTitle.textContent =
+        "Ran " + currentChainCount + " diagnostic command" + (currentChainCount === 1 ? "" : "s");
+      currentChain = null;
+      currentChainBody = null;
+      currentChainStatusPill = null;
+      currentChainHeaderTitle = null;
+      currentChainCount = 0;
+    }
+
+    function renderResult(ev) {
+      closeChainIfOpen();
+      var cost = (ev.cost_usd != null) ? "$" + ev.cost_usd.toFixed(4) : "—";
+      var dur  = (ev.duration_s != null) ? ev.duration_s.toFixed(2) + "s" : "—";
+      var turns = ev.turns != null ? ev.turns : "—";
+
+      appendNode(
+        '<div class="pt-2 w-full max-w-3xl">' +
+          '<div class="flex items-center gap-2 text-slate-500 opacity-70 text-xs py-1.5 font-medium border-t border-slate-100 mt-2">' +
+            '<i data-lucide="check-circle" class="h-3.5 w-3.5 text-emerald-500"></i>' +
+            '<span>Turn completed · done in ' + dur + ' · ' + turns + ' turn' + (turns === 1 ? '' : 's') + ' · ' + cost + '</span>' +
+          '</div>' +
+        '</div>'
+      );
+
+      // also reflect into the right panel's result card
+      resultCard.innerHTML =
+        '<div class="space-y-1">' +
+          '<div class="flex justify-between"><span class="text-slate-400">turns</span><span class="font-mono font-semibold text-slate-800">' + turns + '</span></div>' +
+          '<div class="flex justify-between"><span class="text-slate-400">duration</span><span class="font-mono font-semibold text-slate-800">' + dur + '</span></div>' +
+          '<div class="flex justify-between"><span class="text-slate-400">cost</span><span class="font-mono font-semibold text-slate-800">' + cost + '</span></div>' +
+        '</div>';
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  5. Replay engine — drip events with realistic delays so the user
+     *     can see the screen build up exactly like a live SSE stream.
+     * ----------------------------------------------------------------- */
+    var DELAYS = {
+      "user.prompt":       250,
+      "assistant.thinking": 700,
+      "assistant.text":    900,
+      "tool.use":          550,
+      "tool.result":       650,
+      "result":            500,
+    };
+
+    var dispatchTable = {
+      "user.prompt":        renderUserPrompt,
+      "assistant.thinking": renderThinkingBlock,
+      "assistant.text":     renderAssistantText,
+      "tool.use":           renderToolUse,
+      "tool.result":        renderToolResult,
+      "result":             renderResult,
+    };
+
+    function clearFeed() {
+      feed.innerHTML = "";
+      currentChain = null;
+      currentChainBody = null;
+      currentChainCount = 0;
+      resultCard.innerHTML =
+        '<div class="text-xs text-slate-400">(waiting…)</div>';
+    }
+
+    var inFlight = null;
+    function startReplay() {
+      if (inFlight) clearTimeout(inFlight);
+      clearFeed();
+      setStatus("connecting…", "connecting");
+
+      var i = 0;
+      function step() {
+        if (i === 0) setStatus("streaming", "live");
+        if (i >= MOCKUP_EVENTS.length) {
+          setStatus("done", "open");
+          inFlight = null;
+          return;
+        }
+        var ev = MOCKUP_EVENTS[i++];
+        var fn = dispatchTable[ev.type];
+        if (fn) fn(ev);
+        var delay = DELAYS[ev.type] || 400;
+        inFlight = setTimeout(step, delay);
+      }
+      // small initial wait to show the "connecting" amber dot
+      inFlight = setTimeout(step, 350);
+    }
+
+    document.getElementById("replay-btn").addEventListener("click", startReplay);
+
+    // initial paint + auto-start
+    refreshIcons();
+    startReplay();
+
+  })();
+  </script>
+</body>
+</html>

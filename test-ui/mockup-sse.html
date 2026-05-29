@@ -1,0 +1,2886 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>da-agent — Mockup SSE replay (real stream from mockup_sse.txt)</title>
+
+  <!-- Tailwind v3 Play CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Inter / JetBrains Mono / Space Grotesk -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Lucide icons -->
+  <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              black: "#0d0f12",
+              "dark-gray": "#1a1e24",
+              border: "#e2e8f0",
+              accent: "#3b82f6",
+              teal: "#0d9488",
+              purple: "#7c3aed",
+            },
+          },
+          fontFamily: {
+            sans: ['"Inter"', "ui-sans-serif", "system-ui", "sans-serif"],
+            mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+            display: ['"Space Grotesk"', "sans-serif"],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    html, body { height: 100%; }
+    body {
+      background: #f8fafc;
+      color: #1e293b;
+      font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.3); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.5); }
+
+    @keyframes fade-in   { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes slide-in  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in  { animation: fade-in 200ms ease-out; }
+    .animate-slide-in { animation: slide-in 220ms ease-out; }
+
+    .md-table { border-collapse: collapse; }
+    .md-table th, .md-table td { border: 1px solid #e2e8f0; }
+
+    /* Streaming caret */
+    .stream-caret::after {
+      content: "▍";
+      display: inline-block;
+      color: #94a3b8;
+      animation: blink 1s steps(1) infinite;
+      margin-left: 2px;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+  </style>
+</head>
+
+<body class="overflow-hidden">
+
+  <!-- ===== 3-pane shell ===== -->
+  <div class="flex h-screen w-screen overflow-hidden bg-slate-50">
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-white border-r border-slate-200 h-screen shrink-0 flex flex-col">
+      <div class="p-5 border-b border-slate-100 flex items-center gap-3">
+        <div class="h-9 w-9 bg-slate-900 rounded-lg flex items-center justify-center">
+          <i data-lucide="brain" class="h-5 w-5 text-slate-100"></i>
+        </div>
+        <div>
+          <div class="font-semibold text-slate-800 tracking-tight text-sm">da-agent</div>
+          <div class="text-xs text-slate-500 font-medium">Excel data analyst</div>
+        </div>
+      </div>
+      <div class="p-4">
+        <button class="w-full bg-[#0d0f12] hover:bg-slate-800 text-white font-medium text-sm py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors">
+          <i data-lucide="plus" class="h-4 w-4"></i>
+          New session
+        </button>
+      </div>
+      <nav class="px-3 space-y-1">
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 text-slate-900 text-sm font-medium">
+          <i data-lucide="message-square" class="h-4 w-4"></i> Chat
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="database" class="h-4 w-4"></i> Knowledge
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="file-code" class="h-4 w-4"></i> Outputs
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="settings" class="h-4 w-4"></i> Settings
+        </a>
+      </nav>
+      <div class="px-4 mt-6">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 px-1">Sessions</div>
+        <div class="space-y-0.5">
+          <div class="bg-slate-50 text-slate-950 font-semibold border-l-2 border-slate-900 pl-2.5 py-1.5 text-xs truncate">
+            Mockup SSE replay
+          </div>
+          <div class="text-slate-500 hover:text-slate-900 hover:bg-slate-50 px-2.5 py-1.5 text-xs truncate">
+            Sales Q1 analysis
+          </div>
+        </div>
+      </div>
+      <div class="mt-auto p-4 border-t border-slate-100 text-[10px] text-slate-400 font-mono">
+        sess_bb8cb98cd73a4308
+      </div>
+    </aside>
+
+    <!-- Chat workspace -->
+    <section class="flex-1 flex flex-col h-full bg-[#f8fafc] border-r border-slate-200 min-w-0">
+      <header class="h-16 border-b border-slate-200 bg-white px-6 flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-3 min-w-0">
+          <span id="conn-dot" class="h-2 w-2 rounded-full bg-amber-500 animate-pulse" title="connecting"></span>
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-800 text-sm tracking-tight truncate">Mockup SSE replay</div>
+            <div class="text-[11px] text-slate-500 font-medium font-mono truncate">sess_bb8cb98cd73a4308 · model: claude-sonnet-4-6</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="stream-status" class="text-[11px] text-slate-500 font-medium">idle</span>
+          <span id="event-counter" class="text-[10px] font-mono text-slate-400">0/0 events</span>
+          <button id="replay-btn"
+                  class="px-3 py-1.5 text-xs font-bold rounded-lg bg-[#0d0f12] hover:bg-slate-800 text-white flex items-center gap-1.5 transition-colors">
+            <i data-lucide="rotate-ccw" class="h-3.5 w-3.5"></i>
+            Replay stream
+          </button>
+        </div>
+      </header>
+
+      <div id="feed" class="flex-1 overflow-y-auto px-8 py-6 space-y-6">
+        <!-- empty until JS replays events -->
+      </div>
+
+      <div class="px-8 py-5 bg-white border-t border-slate-200">
+        <div class="border border-slate-300 hover:border-slate-400 focus-within:ring-1 focus-within:ring-slate-400 bg-white rounded-2xl px-4 py-3 flex items-end gap-3 shadow-xs">
+          <textarea
+            class="flex-1 resize-none bg-transparent outline-none text-[13px] text-slate-800 placeholder-slate-400 font-medium"
+            rows="2"
+            placeholder="(mockup) replay từ data/mockup_sse.txt — bấm Replay stream ở header"
+            disabled></textarea>
+          <button class="bg-[#0d0f12] text-white hover:bg-slate-800 transition-colors h-9 w-9 rounded-lg flex items-center justify-center shrink-0 shadow-xs"
+                  disabled>
+            <i data-lucide="send" class="h-4 w-4"></i>
+          </button>
+        </div>
+        <div class="mt-2 flex items-center justify-between">
+          <div class="text-[11px] text-slate-400 font-medium">
+            Data scope: <span class="font-mono text-slate-500">no KB files in scope</span>
+          </div>
+          <div class="text-[11px] text-slate-400 font-medium">
+            Enter to send · Shift+Enter newline
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right panel -->
+    <aside class="w-80 bg-white border-l border-slate-200 shrink-0 p-6 space-y-6 overflow-y-auto">
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Data scope</div>
+        <div class="rounded-xl border border-slate-200 bg-slate-50/40 p-3 text-xs text-slate-500 font-medium">
+          No KB files attached to this turn. Default-all behavior.
+        </div>
+      </div>
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Attachments</div>
+        <div class="rounded-xl border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-400 font-medium text-center">
+          Drop files (mockup, disabled)
+        </div>
+      </div>
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Todos</div>
+        <div id="todos-card" class="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500 font-medium">
+          (empty — turn produced no todos)
+        </div>
+      </div>
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Result</div>
+        <div id="result-card" class="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500 font-medium">
+          (waiting…)
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- ===== Inline raw SSE stream (real bytes from data/mockup_sse.txt) ===== -->
+  <script id="sse-payload" type="text/event-stream">event: user.prompt
+data: {"type": "user.prompt", "session_id": "sess_bb8cb98cd73a4308", "text": "<scope>\nFor this turn, no KB files are in scope.\n</scope>\n\n<user_prompt>\nHãy thinking 10 lần về vấn đề này trước khi trả lời: con gà có trước hay quả trứng có trước\n</user_prompt>"}
+
+event: wait.begin
+data: {"type": "wait.begin", "session_id": "sess_bb8cb98cd73a4308", "label": "Thinking"}
+
+event: todos.snapshot
+data: {"type": "todos.snapshot", "session_id": "sess_bb8cb98cd73a4308", "items": []}
+
+event: system
+data: {"type": "system", "session_id": "sess_bb8cb98cd73a4308", "subtype": "init", "data": {"type": "system", "subtype": "init", "cwd": "/home/phuong/working/csan/da-agent-be", "session_id": "d765e015-bb0a-4eaf-8148-0a894ee7a11c", "tools": ["Task", "AskUserQuestion", "Bash", "CronCreate", "CronDelete", "CronList", "Edit", "EnterPlanMode", "EnterWorktree", "ExitPlanMode", "ExitWorktree", "Glob", "Grep", "NotebookEdit", "Read", "ScheduleWakeup", "Skill", "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskStop", "TaskUpdate", "WebFetch", "WebSearch", "Write"], "mcp_servers": [], "model": "databricks-claude-sonnet-4-6", "permissionMode": "default", "slash_commands": ["xlsx", "update-config", "verify", "debug", "code-review", "batch", "fewer-permission-prompts", "loop", "claude-api", "run", "run-skill-generator", "clear", "compact", "context", "heapdump", "init", "review", "security-review", "usage", "insights", "goal", "team-onboarding"], "apiKeySource": "none", "claude_code_version": "2.1.150", "output_style": "default", "agents": ["architect", "build-error-resolver", "claude", "code-architect", "code-explorer", "code-reviewer", "code-simplifier", "database-reviewer", "Explore", "general-purpose", "Plan", "planner", "refactor-cleaner", "silent-failure-hunter", "statusline-setup", "tdd-guide", "profiler", "analyst", "visualizer"], "skills": ["xlsx", "update-config", "verify", "debug", "code-review", "batch", "fewer-permission-prompts", "loop", "claude-api", "run", "run-skill-generator"], "plugins": [], "analytics_disabled": false, "product_feedback_disabled": false, "uuid": "52afc587-4b4e-41e0-886a-ac49acf55f49", "memory_paths": {"auto": "/home/phuong/.da-agent/sessions/projects/-home-phuong-working-csan-da-agent-be/memory/"}, "fast_mode_state": "off"}}
+
+event: system
+data: {"type": "system", "session_id": "sess_bb8cb98cd73a4308", "subtype": "status", "data": {"type": "system", "subtype": "status", "status": "requesting", "uuid": "3100af52-032f-42a3-84cc-d23d3c07e28e", "session_id": "d765e015-bb0a-4eaf-8148-0a894ee7a11c"}}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "The"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " user is asking the"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " classic"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " philosophical"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " question: \"Which"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " came first, the chicken or the egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "?\" in"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " Vietnamese. They want me to think about"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " it"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " "}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "10 times before answering."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\n\nLet"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " me think through"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " this carefully"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " from"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " multiple"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " angles:\n\n**"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "Thought"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " 1:"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " Evolutionary Biology"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " perspective"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "**\nFrom"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " strict"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " evolutionary standpoint, the egg came"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " first. The first"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " \""}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "chicken"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\" was"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " laid"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " by a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " bird"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " that was"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " almost"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "-"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "but"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "-not-quite a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " chicken. Through"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " genetic"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " mutation"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ","}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " at"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " some point a proto"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "-chicken laid"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " an egg that contained"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a true"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " chicken."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " So"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " the egg ("}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "containing"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a chicken) came before"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " the chicken that"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " hat"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ched from"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " it.\n\n**Thought 2"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ": Definition"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " matters"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " -"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " \"chicken"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\" vs \"egg\"**\n"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\n\nIt"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " really"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " depends on what"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " we"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " mean by \"chicken egg.\" If we"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "'re talking about an"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " laid BY"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a chicken, then the"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " chicken"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " had"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " to exist"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " first. But"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " if we mean"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " an egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " CONTAINING a chicken, then the egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " came first—"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " proto"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "-chicken laid it"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " through"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " mutation."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " The genetic"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " mutation"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " that created the"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " first"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " true"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " chicken happened"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " at"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " fertil"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ization, so the egg with"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " that"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " mut"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ated genome"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " existed"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " before the chicken hat"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ched from"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " it.\n\n**Thought 3"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ": Genetic"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "/"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "DNA"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " perspective**\nTwo"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " proto"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "-chickens m"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ated and"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " produced an"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg with"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a mut"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ated genome that"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ","}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " when hat"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ched, became"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " the"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " first true chicken. The"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg existed"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " before the chicken that"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " emerged"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " from it."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\n\n**Thought 4:"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " Logical"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " perspective"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "**\nThis"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " parad"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ox seems"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " to create"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " an"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " infinite regress—"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "if"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " A"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " requires"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " B and"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " B requires A, we"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "'re"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " stuck in a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " loop. But"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " evolution"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " resol"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ves this by showing"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " grad"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ual change over time rather"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " than sudden creation"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ".\n\n**Thought 5:"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " Religious"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "/Cr"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "eationist perspective**\nFrom"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a cr"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "eationist view"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ", God"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " created the chicken"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " first as"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a fully"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " formed animal"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ", which"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " then laid"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " eggs"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " Chicken"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " first"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\n\n**Thought 6:"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " Therm"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "odynamics"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "/"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "Physics"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " perspective**"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\nEggs"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " as"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " reproductive"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " mechanism"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " existed"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " hundreds"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " of millions of years before chickens evolved"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ". Other"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " species"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " were"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " laying"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " eggs long before chickens appeared,"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " so"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " eggs"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " pre"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "date"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " chick"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ens by"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " an"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " enormous span"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " of"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " time.\n\n**Thought 7"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ": Semantic"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " precision"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "**\nThe"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " question"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " uses"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " specific"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " terms"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "—"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\"chicken\""}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " and \"egg\"—so"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " I"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " need"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " to consider"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " whether"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " we"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "'re being"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " precise"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " about what"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " counts"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " as a chicken"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " versus a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " proto"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "-chicken,"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " and what"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " exactly"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " qual"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ifies as a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " chicken"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\n\n**Thought 8: Modern"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " scientific consensus"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "**\nEvolutionary"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " biologists generally"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " conclude"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " the"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " came"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " first"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " The first"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " chicken hat"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ched from an egg laid by a proto"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "-chicken ancestor"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "."}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " That"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " contained"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " chicken"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " DNA,"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " making"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " it technically"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a chicken egg even"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " though"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " it was"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " laid by a non"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "-chicken.\n\n**Thought "}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "9: Practical"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "/"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "Common"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " sense perspective**\nThis"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " parad"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ox is really"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " about how"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " we categor"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ize things"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " and"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " think"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " about caus"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ality. In"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " reality"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ", there"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " was"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " no single"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " \"first chicken\""}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "—just a grad"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ual population"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " shift"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " where"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " birds"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " slowly"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " became"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " what"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " we'd"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " classify"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " as chickens.\n\n**Thought"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " 10: Synthesis"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "**"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\nThe strongest"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " scientific"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " answer"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " is that the"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " egg came first, produced"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " by a genetic"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " mutation that created"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " the"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " first individual"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " we"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "'d classify"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " as a chicken. But"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " the"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " answer"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " ultimately"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " hin"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ges on how precisely"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " we define \"chicken egg"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": ".\""}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "\n\nNow"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " I'll"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " compose"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " a"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " thought"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "ful response in"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": " Vietnamese"}
+
+event: assistant.thinking.delta
+data: {"type": "assistant.thinking.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c", "text": "."}
+
+event: assistant.thinking.end
+data: {"type": "assistant.thinking.end", "session_id": "sess_bb8cb98cd73a4308", "block_id": "thk_3d5263926a1c"}
+
+event: wait.end
+data: {"type": "wait.end", "session_id": "sess_bb8cb98cd73a4308"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "#"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "🐔 Con"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà có"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " trước hay quả trứng"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " có trước?"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\n\nTôi sẽ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " s"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "uy"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " nghĩ "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "10 gó"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "c độ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " kh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ác nhau tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước khi đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ư"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "a ra k"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ết lu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ận:\n\n---"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\n\n## "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "10"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "l"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ần s"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "uy nghĩ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\n\n|"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " #"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " | Gó"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "c nhìn | K"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ết luận |\n|---|-------"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "---|-------"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "---|\n| 1 | **"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "Ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ến"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " h"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ó"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "a học"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "** | Đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ột"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " bi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ến gene"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " x"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "y ra t"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ại *"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "th"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ời"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " điểm th"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ụ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "nh* —"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " một"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " con \""}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "gần"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "-"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "g"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\" đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ẻ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ra"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " qu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " trứng ch"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứa con"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ầ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "u ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ên →"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " **Tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "**"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " |\n| 2 | **"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "Định"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ngh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ĩa \""}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng gà\"** |"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " N"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ếu là"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " trứng *"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "do"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " g"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ẻ*"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " → g"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước."}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " N"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ếu là trứng *ch"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứa gà* → tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng trước."}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " Câ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "u hỏi m"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ơ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " hồ về"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ng"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ôn ngữ |"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\n| 3 | **DNA"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "/Di"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " truyền học"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "** | DNA"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " của"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà h"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ình"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " th"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ành"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " l"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ú"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "c thụ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " tinh b"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ên"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " trong"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng,"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " k"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "hi con"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà n"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ở"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ra"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " → **Trứ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng trước** |\n| "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "4 | **Logic"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "/Tri"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ết học** | V"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ò"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng nh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ân"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " qu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " v"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ô"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " hạ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "n (`"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "A"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " c"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ần B,"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " B cần A`) —"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " nh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ư"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ến hóa *"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ph"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "á"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " v"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ỡ* v"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "òng l"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ặp này"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " b"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ằ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng s"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ự bi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ến đổi li"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ên tục |\n| 5"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " | **Quan"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " đi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ểm s"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "á"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng thế"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "**"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " | Th"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ần"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " tạ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "o"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ra"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " con"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà ho"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "n ch"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ỉnh tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước,"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " r"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ồi n"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ó m"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ới"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ẻ tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng → **G"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à trước** |\n| "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "6 | **Sinh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " học ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ến"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " hóa r"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ộ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng h"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ơn** | Tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng ("}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "c"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ơ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ch"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ế sinh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " s"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ản"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": ") xu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ất hi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ện h"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ăm triệu nă"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "m tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước k"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "hi có"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " lo"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ài"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà → **Tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng trước** |\n|"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " 7 | **Ngữ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ngh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ĩa học"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "** | \""}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "Trứng gà\" "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "≠ \"qu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả trứng\""}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " — tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng t"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ồ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "n tại từ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " k"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "hi có"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " g"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à,"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " n"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ên câ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "u hỏi có"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " thể t"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ự"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " lời:"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước |\n| 8 |"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " **Đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ồ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng thu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ận"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " kh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "oa học hi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ện đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ại** | Đa"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " số"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " nh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ến"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " hóa học đồ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ý:"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " con"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà đầ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "u tiên n"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ở"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " từ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " một"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " qu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả trứng →"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " **Trứng trước**"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " |\n| 9 | **"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "Th"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ực tế qu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ần"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " thể"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "** | Không"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " có \"con"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ầu tiên\" d"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "uy"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " nhất —"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " s"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ự ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ến hóa là"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " *"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "li"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ên tục và"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " d"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ần"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " dần*,"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " không có ra"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "nh giới r"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "õ ràng |\n|"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " 10 | **T"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ổng"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " h"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ợp** | Câ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "u tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả lời ph"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ụ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " thuộc vào *"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "định"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " nghĩa* b"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ạ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "n ch"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ọn — nhưng kh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "oa"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " học ngh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "i"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ê"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " về"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứng |"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\n\n---\n\n## "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "✅ K"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ết luận\n\n>"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " **Theo"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " kh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "oa học:"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " Qu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả trứng có trước.**"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\n\n**"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "L"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ý lu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ận c"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ố"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "t lõ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "i:** Đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ột"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " biến gene t"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ạo ra \""}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "con"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " gà th"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ực sự đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ầ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "u tiên\" x"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ảy ra b"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ên"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " trong một"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " qu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả trứng,"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " được"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ẻ b"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ở"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "i một con ch"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "im"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " *"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ền"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "-"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "g"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "* (proto-chicken)."}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " Qu"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả trứng đó ch"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ứa DNA"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " của g"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à →"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " n"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ó là \"trứng gà"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\" tr"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ước k"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "hi con gà nở ra."}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "\n\nTuy nhiên, đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ây th"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ực ch"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ất là một **"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "b"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ẫy"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ng"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ô"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "n ngữ** h"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ơn là"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " một"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ngh"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ị"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ch l"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ý th"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ực"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " s"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ự:"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ti"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ến hóa là"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " *liên tục*, không có"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " đi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ể"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "m c"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ắ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "t t"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "uy"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ệt đ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ối"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " —"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " câ"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "u hỏi gi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ả"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " định"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " có"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " ra"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "nh giới rõ rà"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ng gi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ữa \"g"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à\" và \"không"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "-"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "gà\","}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " đi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ều m"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "à thi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ên"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " nhi"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "ên không quan"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " t"}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "âm."}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": " "}
+
+event: assistant.text.delta
+data: {"type": "assistant.text.delta", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0", "text": "🙂"}
+
+event: assistant.text.end
+data: {"type": "assistant.text.end", "session_id": "sess_bb8cb98cd73a4308", "block_id": "txt_48dbfd4eebb0"}
+
+event: result
+data: {"type": "result", "session_id": "sess_bb8cb98cd73a4308", "turns": 1, "cost_usd": 0.116109, "duration_s": 37.84661062801024}
+
+event: wait.end
+data: {"type": "wait.end", "session_id": "sess_bb8cb98cd73a4308"}
+</script>
+
+  <!-- ===== Replay engine + reducer + markdown renderer ===== -->
+  <script>
+  (function () {
+    "use strict";
+
+    // ---------------------------------------------------------------- //
+    // 1. Markdown renderer (subset enough for a Claude-style response). //
+    // CRITICAL: input is full assistant.text accumulated string with    //
+    // real "\n" newlines (decoded by JSON.parse from "\\n" escapes).    //
+    // We split on "\n" and process line-by-line — never collapse them.  //
+    // ---------------------------------------------------------------- //
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"]/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+      });
+    }
+    function renderInline(s) {
+      // bound the input — catastrophic backtracking on mid-stream half-tokens
+      // (e.g. unclosed "**bold...") was throwing RangeError under JSDOM. Real
+      // browsers tolerate it, but capping is cheap insurance and keeps the
+      // dev console quiet during streaming.
+      var src = String(s);
+      if (src.length > 100000) src = src.slice(0, 100000);
+      var out = escapeHtml(src);
+      out = out.replace(/`([^`\n]+?)`/g,
+        '<code class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-800 font-mono text-[11px] border border-slate-200">$1</code>');
+      out = out.replace(/\*\*([^*\n]+?)\*\*/g, '<span class="font-semibold text-slate-950">$1</span>');
+      out = out.replace(/\*([^*\n]+?)\*/g, '<em class="italic">$1</em>');
+      return out;
+    }
+    function renderMarkdown(md) {
+      if (md == null) return "";
+      var lines = String(md).split("\n");
+      var html = "";
+      var i = 0;
+      while (i < lines.length) {
+        var line = lines[i];
+
+        // fenced code block
+        if (/^```/.test(line)) {
+          var lang = line.replace(/^```/, "").trim() || "code";
+          i++;
+          var codeBuf = [];
+          while (i < lines.length && !/^```/.test(lines[i])) {
+            codeBuf.push(lines[i]);
+            i++;
+          }
+          if (i < lines.length) i++;
+          html +=
+            '<div class="border border-slate-200 rounded-xl overflow-hidden my-3 bg-zinc-950 shadow-sm max-w-2xl">' +
+              '<div class="flex items-center justify-between px-4 py-2 bg-zinc-900 border-b border-zinc-900">' +
+                '<span class="font-mono text-[9px] text-zinc-400 font-bold tracking-wider uppercase">' + escapeHtml(lang) + '</span>' +
+                '<span class="text-[9px] text-zinc-500 font-mono">code</span>' +
+              '</div>' +
+              '<pre class="p-3.5 overflow-x-auto"><code class="font-mono text-xs text-emerald-400 whitespace-pre leading-relaxed">' +
+              escapeHtml(codeBuf.join("\n")) +
+              '</code></pre>' +
+            '</div>';
+          continue;
+        }
+
+        // GFM table
+        if (/^\|/.test(line) && i + 1 < lines.length && /^\|\s*[-: |]+\|\s*$/.test(lines[i + 1])) {
+          var head = line.split("|").slice(1, -1).map(function (c) { return c.trim(); });
+          i += 2;
+          var rows = [];
+          while (i < lines.length && /^\|/.test(lines[i])) {
+            rows.push(lines[i].split("|").slice(1, -1).map(function (c) { return c.trim(); }));
+            i++;
+          }
+          html +=
+            '<div class="w-full overflow-x-auto my-3 border border-slate-200 rounded-xl bg-white shadow-xs"><table class="md-table w-full text-xs">' +
+              '<thead class="bg-slate-50 border-b border-slate-200"><tr>' +
+                head.map(function (c) {
+                  return '<th class="px-4 py-2.5 font-semibold text-[11px] uppercase tracking-wider text-slate-500 text-left">' + renderInline(c) + '</th>';
+                }).join("") +
+              '</tr></thead>' +
+              '<tbody>' +
+                rows.map(function (r) {
+                  return '<tr class="hover:bg-slate-50/40">' + r.map(function (c) {
+                    return '<td class="px-4 py-2 text-slate-600 font-medium align-top">' + renderInline(c) + '</td>';
+                  }).join("") + '</tr>';
+                }).join("") +
+              '</tbody>' +
+            '</table></div>';
+          continue;
+        }
+
+        // hr
+        if (/^---\s*$/.test(line)) {
+          html += '<div class="w-full h-px bg-slate-200 my-3"></div>';
+          i++; continue;
+        }
+
+        // headings — match the exact classes provided in the design spec
+        var h3 = line.match(/^###\s+(.*)$/);
+        if (h3) {
+          html += '<div class="text-xs font-bold uppercase tracking-wider text-slate-400 mt-4 mb-2 flex items-center gap-1.5">' +
+                  '<span class="w-1 h-3.5 bg-slate-800 rounded-full"></span>' + renderInline(h3[1]) + '</div>';
+          i++; continue;
+        }
+        var h2 = line.match(/^##\s+(.*)$/);
+        if (h2) {
+          html += '<h2 class="text-[15px] font-bold text-slate-900 mt-4 mb-2 tracking-tight">' + renderInline(h2[1]) + '</h2>';
+          i++; continue;
+        }
+        var h1 = line.match(/^#\s+(.*)$/);
+        if (h1) {
+          html += '<h1 class="text-lg font-bold text-slate-900 mt-3 mb-3 tracking-tight font-display">' + renderInline(h1[1]) + '</h1>';
+          i++; continue;
+        }
+
+        // blockquote
+        if (/^>\s?/.test(line)) {
+          var quote = [];
+          while (i < lines.length && /^>\s?/.test(lines[i])) {
+            quote.push(lines[i].replace(/^>\s?/, ""));
+            i++;
+          }
+          html += '<blockquote class="border-l-2 border-slate-300 pl-3 py-1 my-3 text-xs text-slate-600 font-medium italic">' +
+                  renderInline(quote.join(" ")) + '</blockquote>';
+          continue;
+        }
+
+        // bullet list (- or *)
+        if (/^[-*]\s+/.test(line)) {
+          var items = [];
+          while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^[-*]\s+/, ""));
+            i++;
+          }
+          html += '<ul class="list-disc pl-5 my-2 space-y-1 text-slate-700">' +
+                  items.map(function (it) { return '<li class="text-xs md:text-sm font-medium">' + renderInline(it) + '</li>'; }).join("") +
+                  '</ul>';
+          continue;
+        }
+
+        // numbered list
+        if (/^\d+\.\s+/.test(line)) {
+          var nitems = [];
+          while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+            nitems.push(lines[i].replace(/^\d+\.\s+/, ""));
+            i++;
+          }
+          html += '<ol class="list-decimal pl-5 my-2 space-y-1 text-slate-700">' +
+                  nitems.map(function (it) { return '<li class="text-xs md:text-sm font-medium">' + renderInline(it) + '</li>'; }).join("") +
+                  '</ol>';
+          continue;
+        }
+
+        // blank
+        if (/^\s*$/.test(line)) { i++; continue; }
+
+        // paragraph — collect until blank line OR a line that begins a new
+        // recognized block. CRITICAL: include the FIRST line in the buffer
+        // unconditionally, so a "#" delta arriving before its trailing space
+        // (mid-stream incomplete heading) renders as plain text instead of
+        // looping forever. The block-start guard only applies from the 2nd
+        // line onward.
+        var paraBuf = [line];
+        i++;
+        while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^#{1,3}\s+/.test(lines[i]) && !/^>\s?/.test(lines[i]) && !/^\|/.test(lines[i]) && !/^```/.test(lines[i]) && !/^[-*]\s+/.test(lines[i]) && !/^\d+\.\s+/.test(lines[i]) && !/^---\s*$/.test(lines[i])) {
+          paraBuf.push(lines[i]);
+          i++;
+        }
+        // Join with single space — markdown convention. Real paragraph breaks
+        // (the "\n\n" boundary) are preserved because the blank-line guard
+        // above closes the buffer.
+        html += '<p class="text-slate-600 text-xs md:text-sm font-medium leading-relaxed">' +
+                renderInline(paraBuf.join(" ")) + '</p>';
+      }
+      return html;
+    }
+
+    // ---------------------------------------------------------------- //
+    // 2. SSE wire-format parser. Spec: each event is a sequence of      //
+    //    lines terminated by a BLANK LINE. Lines starting with          //
+    //    "event:" name the event type; lines starting with "data:" are  //
+    //    JSON payload (multi-line concatenated by "\n").                //
+    //    Identical algorithm to BE's tests/_collect_sse pattern.        //
+    // ---------------------------------------------------------------- //
+    function parseSseStream(raw) {
+      // normalize line endings; split on blank lines (handles \r\n too)
+      var blocks = raw.replace(/\r\n/g, "\n").split(/\n\n+/);
+      var events = [];
+      for (var b = 0; b < blocks.length; b++) {
+        var blk = blocks[b];
+        if (!blk || !blk.trim()) continue;
+        var lines = blk.split("\n");
+        var dataLines = [];
+        for (var li = 0; li < lines.length; li++) {
+          var line = lines[li];
+          if (line.indexOf("data:") === 0) {
+            // SSE: a single leading space after the colon is conventional
+            var v = line.slice(5);
+            if (v.charAt(0) === " ") v = v.slice(1);
+            dataLines.push(v);
+          }
+          // event: line is informational — we read "type" from JSON instead
+        }
+        if (dataLines.length === 0) continue;
+        try {
+          var obj = JSON.parse(dataLines.join("\n"));
+          events.push(obj);
+        } catch (e) {
+          // skip malformed (don't break the whole replay)
+          // eslint-disable-next-line no-console
+          console.warn("malformed SSE block dropped:", dataLines.join("\n").slice(0, 80));
+        }
+      }
+      return events;
+    }
+
+    // ---------------------------------------------------------------- //
+    // 3. Reducer — accumulate streamed text per block_id, render        //
+    //    full markdown of the accumulated buffer on each delta.         //
+    // ---------------------------------------------------------------- //
+    var feed = document.getElementById("feed");
+    var statusEl = document.getElementById("stream-status");
+    var connDot = document.getElementById("conn-dot");
+    var resultCard = document.getElementById("result-card");
+    var counterEl = document.getElementById("event-counter");
+
+    var textBuffers = Object.create(null);  // block_id -> accumulated string
+    var textNodes   = Object.create(null);  // block_id -> { wrap, content }
+    var thinkingBuffer = "";
+    var thinkingNode = null;
+    var thinkingContent = null;
+    var thinkingLabel = null;
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      var dotClass = "h-2 w-2 rounded-full ";
+      if (kind === "open")       dotClass += "bg-emerald-500";
+      else if (kind === "live")  dotClass += "bg-emerald-500 animate-pulse";
+      else if (kind === "error") dotClass += "bg-rose-500";
+      else                       dotClass += "bg-amber-500 animate-pulse";
+      connDot.className = dotClass;
+    }
+
+    function refreshIcons() {
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons();
+      }
+    }
+
+    function appendNode(html) {
+      var div = document.createElement("div");
+      div.className = "animate-slide-in";
+      div.innerHTML = html;
+      feed.appendChild(div);
+      refreshIcons();
+      feed.scrollTop = feed.scrollHeight;
+      return div;
+    }
+
+    function stripScopeWrap(text) {
+      var m = String(text || "").match(/<user_prompt>\s*([\s\S]*?)\s*<\/user_prompt>/);
+      return m ? m[1] : (text || "");
+    }
+
+    // --- user.prompt -------------------------------------------------- //
+    function onUserPrompt(ev) {
+      var text = stripScopeWrap(ev.text || "");
+      // user prompt is plain text — preserve real newlines via white-space
+      appendNode(
+        '<div class="flex flex-col items-end ml-auto w-full max-w-3xl">' +
+          '<div class="bg-[#f1f5f9] border border-slate-200 hover:border-slate-300 text-slate-900 rounded-2xl px-5 py-3 shadow-xs max-w-md">' +
+            '<div class="text-[13px] font-medium leading-relaxed whitespace-pre-wrap">' + escapeHtml(text) + '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    // --- thinking accumulator (single block expected per turn) ------- //
+    function ensureThinkingNode() {
+      if (thinkingNode) return thinkingNode;
+      var node = appendNode(
+        '<div class="w-full max-w-2xl font-sans text-slate-700 select-none">' +
+          '<div data-th-toggle class="flex items-center justify-between text-xs text-slate-500 hover:text-slate-800 cursor-pointer font-semibold py-1.5 transition-colors">' +
+            '<div class="flex items-center gap-2">' +
+              '<span class="h-2 w-2 rounded-full bg-blue-500 animate-pulse"></span>' +
+              '<span class="font-sans text-slate-600 font-semibold">Thought process</span>' +
+            '</div>' +
+            '<div class="flex items-center gap-1">' +
+              '<span data-th-label class="text-[10px] font-sans text-slate-400">Hide process</span>' +
+              '<i data-lucide="chevron-up" class="h-3.5 w-3.5"></i>' +
+            '</div>' +
+          '</div>' +
+          '<div data-th-body class="mt-2.5 ml-1 pl-4 border-l border-slate-200 relative space-y-2 pt-1 pb-2">' +
+            '<div class="absolute -left-[11px] -top-1 bg-[#f8fafc]">' +
+              '<span class="h-5 w-5 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center">' +
+                '<i data-lucide="clock" class="h-3 w-3 text-slate-500"></i>' +
+              '</span>' +
+            '</div>' +
+            '<div data-th-content class="text-xs text-slate-500 font-medium pl-2.5 italic leading-relaxed whitespace-pre-wrap stream-caret"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="w-full h-px bg-slate-200/50 my-2"></div>'
+      );
+      thinkingNode = node;
+      thinkingContent = node.querySelector("[data-th-content]");
+      thinkingLabel = node.querySelector("[data-th-label]");
+      var toggle = node.querySelector("[data-th-toggle]");
+      var body = node.querySelector("[data-th-body]");
+      toggle.addEventListener("click", function () {
+        var hidden = body.classList.toggle("hidden");
+        thinkingLabel.textContent = hidden ? "Show process" : "Hide process";
+      });
+      return node;
+    }
+    function onThinkingDelta(ev) {
+      ensureThinkingNode();
+      thinkingBuffer += String(ev.text || "");
+      // keep raw text + preserve newlines via whitespace-pre-wrap; thinking
+      // payload is internal monologue, not markdown — leave untouched so
+      // every \n the model emitted is visible.
+      thinkingContent.textContent = thinkingBuffer;
+      feed.scrollTop = feed.scrollHeight;
+    }
+    function onThinkingEnd() {
+      if (thinkingContent) thinkingContent.classList.remove("stream-caret");
+      // header pulse → solid
+      if (thinkingNode) {
+        var dot = thinkingNode.querySelector(".bg-blue-500");
+        if (dot) dot.classList.remove("animate-pulse");
+      }
+    }
+
+    // --- assistant.text streamed by block_id ------------------------- //
+    function ensureTextNode(blockId) {
+      if (textNodes[blockId]) return textNodes[blockId];
+      var node = appendNode(
+        '<div class="flex flex-col items-start mr-auto w-full max-w-3xl">' +
+          '<div class="space-y-3 text-slate-800 max-w-full font-sans">' +
+            '<div data-text-content class="space-y-3 stream-caret"></div>' +
+          '</div>' +
+        '</div>'
+      );
+      var content = node.querySelector("[data-text-content]");
+      textNodes[blockId] = { wrap: node, content: content };
+      return textNodes[blockId];
+    }
+    function onTextDelta(ev) {
+      var bid = ev.block_id;
+      if (!bid) return;
+      textBuffers[bid] = (textBuffers[bid] || "") + String(ev.text || "");
+      var n = ensureTextNode(bid);
+      // CRITICAL: re-render full accumulated markdown every delta —
+      // partial-line incremental rendering would drop the table/header
+      // structure on incomplete lines. Re-rendering the full buffer is
+      // O(N²) on chars but mockup_sse.txt is ~6KB of text — fine.
+      n.content.innerHTML = renderMarkdown(textBuffers[bid]);
+      feed.scrollTop = feed.scrollHeight;
+    }
+    function onTextEnd(ev) {
+      var bid = ev.block_id;
+      var n = textNodes[bid];
+      if (!n) return;
+      n.content.classList.remove("stream-caret");
+      n.content.innerHTML = renderMarkdown(textBuffers[bid]);
+    }
+
+    // --- atomic fallback for non-streaming text ---------------------- //
+    function onTextAtomic(ev) {
+      // mockup data uses streaming — but support atomic fallback so
+      // this engine matches BE wire format spec §11.
+      appendNode(
+        '<div class="flex flex-col items-start mr-auto w-full max-w-3xl">' +
+          '<div class="space-y-3 text-slate-800 max-w-full font-sans">' +
+            renderMarkdown(ev.text || "") +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    // --- result ------------------------------------------------------ //
+    function onResult(ev) {
+      var cost  = (ev.cost_usd  != null) ? "$" + Number(ev.cost_usd).toFixed(4) : "—";
+      var dur   = (ev.duration_s != null) ? Number(ev.duration_s).toFixed(2) + "s" : "—";
+      var turns = (ev.turns != null) ? ev.turns : "—";
+      appendNode(
+        '<div class="pt-2 w-full max-w-3xl">' +
+          '<div class="flex items-center gap-2 text-slate-500 opacity-70 text-xs py-1.5 font-medium border-t border-slate-100 mt-2">' +
+            '<i data-lucide="check-circle" class="h-3.5 w-3.5 text-emerald-500"></i>' +
+            '<span>Turn completed · done in ' + dur + ' · ' + turns + ' turn' + (turns === 1 ? '' : 's') + ' · ' + cost + '</span>' +
+          '</div>' +
+        '</div>'
+      );
+      resultCard.innerHTML =
+        '<div class="space-y-1">' +
+          '<div class="flex justify-between"><span class="text-slate-400">turns</span><span class="font-mono font-semibold text-slate-800">' + turns + '</span></div>' +
+          '<div class="flex justify-between"><span class="text-slate-400">duration</span><span class="font-mono font-semibold text-slate-800">' + dur + '</span></div>' +
+          '<div class="flex justify-between"><span class="text-slate-400">cost</span><span class="font-mono font-semibold text-slate-800">' + cost + '</span></div>' +
+        '</div>';
+    }
+
+    function onWaitBegin(ev) {
+      setStatus(ev.label || "Working", "live");
+    }
+    function onWaitEnd() {
+      setStatus("streaming", "live");
+    }
+    function onSystem() { /* no-op for replay UI */ }
+    function onTodos() { /* no-op — turn produced empty list */ }
+    function onError(ev) {
+      appendNode(
+        '<div class="flex flex-col items-start mr-auto w-full max-w-3xl">' +
+          '<div class="border border-rose-200 bg-rose-50 rounded-xl px-4 py-3 text-xs text-rose-700 font-medium">' +
+            '<span class="font-bold">Error:</span> ' + escapeHtml(ev.message || "") +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    var dispatch = {
+      "user.prompt":             onUserPrompt,
+      "wait.begin":              onWaitBegin,
+      "wait.end":                onWaitEnd,
+      "system":                  onSystem,
+      "todos.snapshot":          onTodos,
+      "assistant.thinking.delta": onThinkingDelta,
+      "assistant.thinking.end":   onThinkingEnd,
+      "assistant.thinking":       onThinkingDelta,  // atomic fallback
+      "assistant.text.delta":     onTextDelta,
+      "assistant.text.end":       onTextEnd,
+      "assistant.text":           onTextAtomic,
+      "result":                   onResult,
+      "error":                    onError,
+      // tool.use / tool.result / interaction.requested / output.created
+      // are not in this fixture — left out intentionally to keep the
+      // mockup focused on the markdown-rendering bug we're fixing.
+    };
+
+    // ---------------------------------------------------------------- //
+    // 4. Replay engine — drip events with realistic delays.             //
+    //    Delta events are very fast (8ms) to mimic real model latency.  //
+    // ---------------------------------------------------------------- //
+    var DELAYS = {
+      "user.prompt":               300,
+      "wait.begin":                250,
+      "wait.end":                  120,
+      "system":                    20,
+      "todos.snapshot":            20,
+      "assistant.thinking.delta":  8,
+      "assistant.thinking.end":    150,
+      "assistant.thinking":        500,
+      "assistant.text.delta":      10,
+      "assistant.text.end":        180,
+      "assistant.text":            500,
+      "tool.use":                  400,
+      "tool.result":               400,
+      "interaction.requested":     200,
+      "output.created":            150,
+      "result":                    300,
+      "error":                     200,
+    };
+
+    function clearFeed() {
+      feed.innerHTML = "";
+      textBuffers = Object.create(null);
+      textNodes = Object.create(null);
+      thinkingBuffer = "";
+      thinkingNode = null;
+      thinkingContent = null;
+      thinkingLabel = null;
+      resultCard.innerHTML = '<div class="text-xs text-slate-400">(waiting…)</div>';
+    }
+
+    var inFlight = null;
+    function startReplay() {
+      if (inFlight) clearTimeout(inFlight);
+      clearFeed();
+      setStatus("connecting…", "connecting");
+
+      var raw = document.getElementById("sse-payload").textContent;
+      var events = parseSseStream(raw);
+      counterEl.textContent = "0/" + events.length + " events";
+
+      var i = 0;
+      function step() {
+        if (i === 0) setStatus("streaming", "live");
+        if (i >= events.length) {
+          setStatus("done", "open");
+          counterEl.textContent = events.length + "/" + events.length + " events";
+          inFlight = null;
+          return;
+        }
+        var ev = events[i++];
+        counterEl.textContent = i + "/" + events.length + " events";
+        var fn = dispatch[ev.type];
+        if (fn) {
+          try { fn(ev); }
+          catch (e) {
+            // eslint-disable-next-line no-console
+            console.error("dispatch error for", ev.type, e);
+          }
+        }
+        // unknown event types are silently ignored (forward-compat per spec §11)
+        var delay = DELAYS[ev.type];
+        if (delay == null) delay = 100;
+        inFlight = setTimeout(step, delay);
+      }
+      inFlight = setTimeout(step, 350);
+    }
+
+    document.getElementById("replay-btn").addEventListener("click", startReplay);
+
+    // initial paint + auto-start
+    refreshIcons();
+    startReplay();
+
+  })();
+  </script>
+</body>
+</html>
