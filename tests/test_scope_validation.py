@@ -19,7 +19,6 @@ import httpx
 import pytest
 import pytest_asyncio
 from claude_agent_sdk import (
-    AssistantMessage,
     ResultMessage,
 )
 

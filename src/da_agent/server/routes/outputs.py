@@ -66,8 +66,6 @@ async def download_output(
 
 
 @router.delete("/{output_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_output(
-    output_id: str, state: AppState = Depends(get_state)
-) -> None:
+async def delete_output(output_id: str, state: AppState = Depends(get_state)) -> None:
     if not await state.outputs.delete(output_id):
         raise HTTPException(status_code=404, detail="output not found")

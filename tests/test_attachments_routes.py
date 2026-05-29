@@ -55,6 +55,7 @@ _SMALL_FILE = b"hello attachments"
 # Tests
 # --------------------------------------------------------------------------- #
 
+
 async def test_upload_unknown_session_returns_404(client):
     r = await client.post(
         "/sessions/sess_unknown/attachments",

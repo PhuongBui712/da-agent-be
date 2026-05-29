@@ -161,7 +161,9 @@ def render_scope(block: ScopeBlock, user_prompt: str) -> str:
 
     if block.attachment_entries:
         lines.append("")
-        lines.append("Short-term attachments (no manifest, read directly with xlsx skill):")
+        lines.append(
+            "Short-term attachments (no manifest, read directly with xlsx skill):"
+        )
         for a in block.attachment_entries:
             lines.append(f"- {a.file_path}")
 

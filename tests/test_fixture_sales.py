@@ -3,9 +3,9 @@
 Ensures the fixture remains preprocessable. If it breaks (header changes,
 sheet renames, openpyxl bumps), this fails before the live smoke does.
 """
+
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,9 @@ async def test_sales_fixture_preprocesses(tmp_path: Path) -> None:
     kb_root = tmp_path / "kb"
     kb_root.mkdir()
     registry = KbRegistry(kb_root / "registry.json")
-    meta = await registry.create(filename="sales.xlsx", size_bytes=FIXTURE.stat().st_size)
+    meta = await registry.create(
+        filename="sales.xlsx", size_bytes=FIXTURE.stat().st_size
+    )
     kb_dir = kb_root / meta.id
     kb_dir.mkdir()
     (kb_dir / "raw.xlsx").write_bytes(FIXTURE.read_bytes())
