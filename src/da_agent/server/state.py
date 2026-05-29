@@ -41,6 +41,12 @@ class SessionMeta:
     created_at: float = field(default_factory=_now)
     updated_at: float = field(default_factory=_now)
     parent_id: str | None = None
+    # SDK-minted UUID captured from the first `SystemMessage(subtype="init")`
+    # of a turn. `None` for sessions that have never had a runner connect.
+    # Persisted in registry.json so the BE can (a) replay historical
+    # transcripts via `claude_agent_sdk.get_session_messages` and (b) pass
+    # `resume=<uuid>` to `ClaudeAgentOptions` on subsequent runner inits.
+    sdk_session_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,16 +55,18 @@ class SessionMeta:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "parent_id": self.parent_id,
+            "sdk_session_id": self.sdk_session_id,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SessionMeta":
         return cls(
             id=d["id"],
-            name=d.get("name", "untitled"),
+            name=d.get("name", "Untitled"),
             created_at=float(d.get("created_at", _now())),
             updated_at=float(d.get("updated_at", _now())),
             parent_id=d.get("parent_id"),
+            sdk_session_id=d.get("sdk_session_id"),
         )
 
 
@@ -105,12 +113,12 @@ class SessionRegistry:
             return self._items.get(sid)
 
     async def create(
-        self, name: str = "untitled", parent_id: str | None = None
+        self, name: str = "Untitled", parent_id: str | None = None
     ) -> SessionMeta:
         async with self._lock:
             await self.load()
             meta = SessionMeta(
-                id=_new_id(), name=name or "untitled", parent_id=parent_id
+                id=_new_id(), name=name or "Untitled", parent_id=parent_id
             )
             self._items[meta.id] = meta
             await self._flush_locked()
@@ -142,6 +150,21 @@ class SessionRegistry:
             if sid not in self._items:
                 return False
             del self._items[sid]
+            await self._flush_locked()
+            return True
+
+    async def set_sdk_session_id(self, sid: str, sdk_session_id: str) -> bool:
+        """Persist the SDK-minted UUID captured from a `SystemMessage(init)`.
+
+        Idempotent — returns False without flushing if the value is unchanged
+        (the runner re-fires `init` on every turn). Returns True on update.
+        """
+        async with self._lock:
+            await self.load()
+            meta = self._items.get(sid)
+            if meta is None or meta.sdk_session_id == sdk_session_id:
+                return False
+            meta.sdk_session_id = sdk_session_id
             await self._flush_locked()
             return True
 
