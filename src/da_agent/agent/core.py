@@ -62,6 +62,7 @@ class AgentRunner:
         settings: Settings | None = None,
         *,
         on_output_detection: Callable[[OutputDetection], None] | None = None,
+        resume_sdk_session_id: str | None = None,
     ):
         self.ui = ui
         self.settings = settings or Settings()
@@ -69,6 +70,11 @@ class AgentRunner:
         self._client: ClaudeSDKClient | None = None
         self._first_block = True
         self._todos = TodoStore()
+        # When set, passed to `ClaudeAgentOptions(resume=...)` so the SDK
+        # resumes the existing JSONL transcript instead of opening a new
+        # session. Captured from `SystemMessage(init)` and persisted on
+        # SessionMeta by the route layer (server/routes/messages.py).
+        self._resume_sdk_session_id = resume_sdk_session_id
         # Spec §8.2 — observe Write/Edit/Bash tool calls and surface detected
         # writes under outputs_dir/<id>/ or kb_dir/<kb_id>/versions/. CLI passes
         # no callback (`on_output_detection=None`) and the observer becomes a
@@ -136,6 +142,7 @@ class AgentRunner:
             ],
             env=env,
             include_partial_messages=s.stream_responses,
+            resume=self._resume_sdk_session_id,
         )
 
     # ------------------------------------------------------------------ #
