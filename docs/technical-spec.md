@@ -75,7 +75,20 @@ flowchart TB
     └── projects/<project>/<session_id>.jsonl
 ```
 
-`attachments/` lives at the data-root level (parallel to `sessions/`) to avoid colliding with the SDK's `sessions/projects/<project>/<id>.jsonl` layout. `Settings` will gain `outputs_dir` and `attachments_dir` when this design is implemented; the existing `kb_dir` and `sessions_dir` are unchanged.
+`attachments/` lives at the data-root level (parallel to `sessions/`) to avoid colliding with the SDK's `sessions/projects/<project>/<id>.jsonl` layout. `Settings` exposes `kb_dir`, `sessions_dir`, `outputs_dir`, and `attachments_dir` as derived paths under `data_root`.
+
+**Configuration env vars** (all prefixed `DA_AGENT_`, parsed in `src/da_agent/config.py`):
+
+| Env var | Setting | Default | Reference |
+|---|---|---|---|
+| `DA_AGENT_HOME` | `data_root` | `~/.da-agent` | §4 |
+| `DA_AGENT_MODEL` | `model` | `databricks-claude-sonnet-4-6` | §10 |
+| `DA_AGENT_MAX_TURNS` | `max_turns` | unset (SDK default) | §8 |
+| `DA_AGENT_PLAN_FIRST` | `plan_first` | `False` | §8.3 |
+| `DA_AGENT_SHOW_THINKING` | `show_thinking` | `True` | §8.6 |
+| `DA_AGENT_STREAM` | `stream_responses` | `True` | §8.6 |
+| `DA_AGENT_ATTACHMENT_MAX_BYTES` | `attachment_max_bytes` | `100 MiB` | §5.3 |
+| `DA_AGENT_SCOPE_WARN_BYTES` | `scope_warn_bytes` | `256 KiB` | §8.5 |
 
 ---
 
@@ -104,31 +117,72 @@ flowchart LR
   H --> I["status: READY"]
 ```
 
-**`manifest.json`** — compact, the agent's primary view of a KB file:
+**`manifest.json`** — compact, the agent's primary view of a KB file (dataclasses defined in `src/da_agent/kb/manifest.py`):
 
 ```jsonc
 {
   "kb_id": "kb_123",
+  "source_filename": "Sales.xlsx",          // original (sanitized) basename
+  "generated_at": 1748332800.0,             // epoch seconds (float)
   "sheets": [{
     "name": "Sales",
     "dims": {"rows": 48211, "cols": 12},
     "regions": [{
-      "region_id": "Sales!A1",
+      "region_id": "Sales!A1",              // "<sheet>!<topleft>"
       "range": "A1:L48211",
-      "header_row": 1,
+      "header_row": 1,                      // 1-based row index in the SHEET
       "columns": [
-        {"name": "order_id", "dtype": "int", "role": "pk?", "cardinality": 48211, "null_pct": 0},
-        {"name": "customer_id", "dtype": "int", "role": "fk?->Customers.id", "null_pct": 0.2},
-        {"name": "amount", "dtype": "float", "min": 0.5, "max": 9821.0, "null_pct": 0}
+        {
+          "name": "order_id", "dtype": "int", "cardinality": 48211, "null_pct": 0,
+          "role": "pk?", "min": null, "max": null,
+          "sample_values": [1, 2, 3, 4, 5], "cardinality_capped": false
+        },
+        {
+          "name": "customer_id", "dtype": "int", "cardinality": 12000, "null_pct": 0.2,
+          "role": "fk?->Customers.id",
+          "sample_values": [101, 102, 103], "cardinality_capped": false
+        },
+        {
+          "name": "amount", "dtype": "float", "cardinality": 38211, "null_pct": 0,
+          "role": null, "min": 0.5, "max": 9821.0,
+          "sample_values": [0.5, 12.0, 99.99], "cardinality_capped": false
+        }
       ],
-      "sample_rows": 5
+      "sample_rows": [[1, 101, 12.5], [2, 102, 99.0]],   // up to SAMPLE_ROW_LIMIT rows
+      "low_confidence": false               // true when header inference fell back
     }]
   }],
   "relationships": [
+    // `from_` Python field is renamed to `from` in JSON (see Relationship.to_dict).
     {"from": "Sales.customer_id", "to": "Customers.id", "confidence": 0.94}
   ]
 }
 ```
+
+#### 5.1.1 Tunables
+
+Constants in `src/da_agent/kb/preprocess.py` (kept module-local so tests can monkey-patch):
+
+| Constant | Default | Role |
+|---|---|---|
+| `PROFILE_ROW_CAP` | `50_000` | Rows scanned per region for column profiling. Cardinality reports `cardinality_capped=true` when truncated. |
+| `SAMPLE_ROW_LIMIT` | `5` | Rows emitted in `region.sample_rows`. |
+| `SAMPLE_VALUE_LIMIT` | `5` | Distinct values emitted in `column.sample_values`. |
+| `MIN_REGION_AREA` | `2` | Drop 1×1 clusters (stray labels); narrow 1-col tables still admitted. |
+| `FK_MIN_CONFIDENCE` | `0.8` | Sample-value overlap ratio required to emit a `Relationship`. Confidence is a float in `[0, 1]`. |
+| `HEADER_STRING_RATIO` | `0.6` | ≥60% of header-row non-null cells must be strings (and none purely numeric). |
+
+#### 5.1.2 Algorithm details
+
+- **Async mechanism.** The route handler launches `run_pipeline(...)` as a fire-and-forget `asyncio.create_task`; its body wraps the blocking `build_manifest` call in `asyncio.to_thread`. Tasks are tracked in `AppState._kb_tasks` and cancelled cleanly on shutdown.
+- **Crash recovery.** `KbRegistry.load()` sweeps any leftover `PROCESSING` rows to `FAILED("interrupted by restart")` on boot, then flushes the registry so a second boot is consistent. There is no v1 retry path — the user re-uploads.
+- **Narrow-table short-circuit.** Region detection skips the row-axis split when an occupancy axis is ≤1 column wide. Without this guard, a single sparse column would shred into 1×1 fragments that fail `MIN_REGION_AREA`.
+- **PK heuristic.** A column is marked `role="pk?"` only when it is id-like AND has unique no-null values AND its dtype is `int` or `str`. "Id-like" means: name == `id`, or `<sheet>_id` / `<sheet_singular>_id` / `<sheet>id`, or `<noun>_id` where `<noun>` is NOT another sheet's stem (those are FK candidates).
+- **FK overlap.** A non-PK column whose name relates to a PK candidate (suffix `_id` match, stem == sheet singular, or exact name match) is emitted as a `Relationship` when the source column's `sample_values` are a subset of the target's at ≥`FK_MIN_CONFIDENCE`. The `confidence` value is the overlap ratio, rounded to 2 decimals.
+
+#### 5.1.3 Dependencies
+
+The KB pipeline depends only on `openpyxl >= 3.1` and stdlib; the FastAPI multipart path adds `python-multipart >= 0.0.9`. The backend deliberately stays pandas-free — region detection and dtype inference run on pure openpyxl + stdlib (Golden Rule 1). Pandas is reserved for the agent's runtime, not for ingestion.
 
 ### 5.2 Edge Cases
 
@@ -151,7 +205,7 @@ Files dropped into the chat composer are uploaded once and live for the lifetime
   "filename": "draft.xlsx",         // original, sanitized (path components stripped)
   "size_bytes": 18422,
   "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "uploaded_at": "2026-05-27T08:09:11Z"
+  "uploaded_at": 1748332751.0       // epoch seconds (float), matches created_at/updated_at elsewhere
 }
 ```
 
@@ -836,6 +890,106 @@ wait.end
 
 ---
 
+### 8.7 Session history loading & resume
+
+**Problem.** Reopening a session in the FE should populate the chat scrollback
+with prior turns instead of an empty pane. Live SSE only carries events for the
+*current* turn; the JSONL transcript on disk is the authoritative record of
+everything before it.
+
+**`SessionMeta.sdk_session_id`.** A new optional field (`str | None`) on
+`SessionMeta`, persisted in `<data_root>/registry.json`. Captured from the SDK's
+`SystemMessage(subtype="init")` on the first turn of a session and reused on
+every subsequent turn. Legacy registries without the field load with `None` via
+`SessionMeta.from_dict` default.
+
+**Capture mechanism.** `WebAgentUI.__init__` accepts an optional
+`on_sdk_session_id: Callable[[str], None]` callback. `WebAgentUI.on_system`
+invokes it whenever `subtype == "init"` and `data["session_id"]` is a non-empty
+string. The route layer (`server/routes/messages.py:_ensure_runner`) wires the
+callback to `state.registry.set_sdk_session_id(sid, sdk_uuid)` via
+`asyncio.create_task` — fire-and-forget with `add_done_callback` to swallow
+exceptions cleanly. `set_sdk_session_id` is idempotent (no flush when the value
+is unchanged), so repeated `init` events on the same session are cheap.
+
+**Resume on subsequent inits.** `AgentRunner` accepts a kwarg
+`resume_sdk_session_id: str | None`. `_build_options()` passes it through as
+`ClaudeAgentOptions(resume=...)` so the SDK reuses the existing JSONL
+transcript instead of opening a fresh session UUID. `_ensure_runner` reads the
+value off `runtime.meta.sdk_session_id` when constructing the runner.
+
+**Endpoint** `GET /sessions/{sid}/messages` → `MessageHistoryResponse(events: list[dict])`:
+
+- `404` when the session id is unknown.
+- `200` with empty `events` when `sdk_session_id is None` (no runner has ever
+  connected — fresh session).
+- Otherwise reads JSONL via `claude_agent_sdk.get_session_messages(sdk_uuid)`
+  (offloaded to `asyncio.to_thread` since it is sync filesystem I/O), translated
+  through `replay_to_events`. The SDK helper is called with `directory=None` so
+  it scans every project dir under `CLAUDE_CONFIG_DIR/projects/` — passing
+  `project_root` would silently miss the JSONL on path-NFC / symlink / worktree
+  mismatches.
+
+**Replay translator** (`server/replay.py:replay_to_events`):
+
+| Source | Emitted event(s) |
+|---|---|
+| `user` role with `str` content | `result(turns=N-1, cost_usd=null, duration_s=0)` boundary if not the first turn, then `user.prompt` |
+| `user` role with list of `tool_result` blocks | one `tool.result` per block (`depth=0`, summary via `_stringify_tool_result`, `tool_use_id` preserved) |
+| `assistant` role `text` block | `assistant.text` (skip whitespace-only) |
+| `assistant` role `thinking` block | `assistant.thinking` (skip whitespace-only) |
+| `assistant` role `tool_use` block | `tool.use` IF `name not in _INTERACTIVE_TOOLS` (= `{AskUserQuestion, ExitPlanMode}` ∪ `TODO_TOOL_NAMES`); other types skipped |
+
+A trailing synthetic `result(turns=N, cost_usd=null, duration_s=0)` is appended
+after the last assistant turn so the FE reducer flips `inToolChain=false` and
+marks open thinking blocks `done`. Every emitted dict carries `session_id=sid`
+to match the live SSE wire shape — the FE folds replay events through the same
+`streamReducer` with zero new render code.
+
+**Lifespan env mirror.** `server/app.py` lifespan sets
+`os.environ["CLAUDE_CONFIG_DIR"] = str(settings.sessions_dir)` on enter and
+restores the previous value on exit. The SDK subprocess already has the same
+value baked into its env (via `ClaudeAgentOptions.env`); the parent FastAPI
+process needs the mirror because `claude_agent_sdk.get_session_messages` reads
+`CLAUDE_CONFIG_DIR` from `os.environ` directly. Without the mirror, history
+loads would miss any JSONL the subprocess just wrote.
+
+**JSONL flush race.** The SDK writes JSONL asynchronously after the live
+`result` event reaches the client. If the FE GETs `/messages` immediately after
+a turn ends, the trailing `assistant.text` block may still be missing on disk.
+In practice users click the sidebar to revisit a session minutes after the
+turn — the race is theoretical. v1 documents this as a known limitation; no
+automatic mitigation.
+
+**Default session name.** `"Untitled"` (capitalized) is applied consistently in
+`CreateSessionRequest` default, `SessionMeta.from_dict` fallback, and
+`SessionRegistry.create`. (Earlier drafts used lowercase `"untitled"`.)
+
+**Sequence — open an existing session:**
+
+```mermaid
+sequenceDiagram
+  participant FE as Frontend
+  participant API as Backend
+  participant Reg as SessionRegistry
+  participant SDK as claude_agent_sdk
+  participant FS as ~/.da-agent/sessions
+
+  FE->>API: GET /sessions/{sid}/messages
+  API->>Reg: get(sid)
+  alt sdk_session_id is None
+    API-->>FE: 200 {events: []}
+  else
+    API->>SDK: get_session_messages(sdk_uuid, directory=None)
+    SDK->>FS: read JSONL across projects/*/
+    SDK-->>API: list[SessionMessage]
+    API->>API: replay_to_events(...)
+    API-->>FE: 200 {events: [...]}
+  end
+```
+
+---
+
 ## 9. Frontend
 
 Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via SSE.
@@ -869,13 +1023,14 @@ Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via S
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/kb/files` | Add xlsx → trigger preprocess |
-| POST | `/kb/files/import-sheet` | Import Google Sheet as KB |
+| POST | `/kb/files/import-sheet` | **Stub returning `501 Not Implemented`** — Google Sheets import deferred (§14 OAuth open question) |
 | GET | `/kb/files` · `/kb/files/{id}/manifest` | List / inspect |
 | DELETE | `/kb/files/{id}` | Delete KB dir |
 | POST | `/sessions` | Create session |
 | GET | `/sessions` · `/sessions/{id}` | List / resume metadata |
+| GET | `/sessions/{sid}/messages` | Replay prior turns as a list of SSE-shape event dicts (`{events: list[dict]}`). 404 if `sid` unknown; empty `events` for fresh sessions. See §8.7. |
 | POST | `/sessions/{id}/messages` | Send turn (SSE stream back). Body: `{prompt, kb_scope?, attachments?}` — see §8.5 for shape and validation. |
-| POST | `/sessions/{sid}/attachments` | Upload a short-term file for the session (multipart). Returns `{attachment_id, filename, size_bytes, mime, uploaded_at}`. |
+| POST | `/sessions/{sid}/attachments` | Upload a short-term file for the session (multipart). Returns `{attachment_id, filename, size_bytes, mime, uploaded_at}` (`uploaded_at` is epoch seconds). |
 | GET  | `/sessions/{sid}/attachments` | List attachments for a session. |
 | DELETE | `/sessions/{sid}/attachments/{att_id}` | Remove a single attachment. |
 | POST | `/sessions/{id}/interactions/{tool_use_id}/respond` | Resolve a paused interaction (`AskUserQuestion` answers or `ExitPlanMode` verdict) |
@@ -924,7 +1079,7 @@ Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via S
 - Google Sheets auth flow for a local single user (loopback OAuth vs. service account).
 - Interaction state durability (§8.3): `InteractionStore` is in-memory; should pending interactions survive a backend restart, or is reload-and-resume sufficient for a single-user tool?
 - Todo overlay row cap (§8.4): is a fixed cap (default 8) acceptable, or should the overlay scroll/collapse instead?
-- Scope size cap (§8.5): should the assembled `<scope>` block have a hard byte cap (vs. only the warn-level cap proposed)? Relevant once a user has dozens of KBs and uses default-all.
+- Scope size cap (§8.5): the soft-warn cap (`scope_warn_bytes`, default 256 KiB) ships and emits a log warning when exceeded; whether to add a hard byte cap that rejects the turn outright is still open. Relevant once a user has dozens of KBs and uses default-all.
 - Attachment retention (§5.3, §8.5): attachments live for the session lifetime — do we need a per-attachment TTL or size-based eviction inside a long-running session?
 - KB status SSE channel (§8.5): should status transitions push to the chat screen so the checkbox un-greys without polling, or is FE-side polling sufficient?
 - Output retention (§8.2): cleanup policy for `~/.da-agent/outputs/` (already adjacent to the existing `versions/` cleanup question).
