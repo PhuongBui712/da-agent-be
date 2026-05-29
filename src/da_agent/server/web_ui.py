@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from ..agent.events import (
     Answer,
@@ -30,7 +30,13 @@ def _new_tool_use_id() -> str:
 class WebAgentUI:
     """One instance per session. The active turn's stream is set via `attach`."""
 
-    def __init__(self, *, session_id: str, app_state: AppState) -> None:
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        app_state: AppState,
+        on_sdk_session_id: Callable[[str], None] | None = None,
+    ) -> None:
         self.session_id = session_id
         self._app_state = app_state
         self._stream: TurnStream | None = None
@@ -38,6 +44,11 @@ class WebAgentUI:
         # latches True on the first text delta of a turn so we can clear
         # the thinking wait label exactly once.
         self._text_delta_seen: bool = False
+        # Invoked once per turn from `on_system("init", data)` with the SDK's
+        # minted UUID. Lets the route layer persist it to SessionMeta so we
+        # can replay the JSONL transcript on reopen and resume the SDK on
+        # subsequent runner connects. None for non-server usages.
+        self._on_sdk_session_id = on_sdk_session_id
 
     # --- stream binding (per turn) ------------------------------------- #
     def attach(self, stream: TurnStream) -> None:
@@ -117,6 +128,10 @@ class WebAgentUI:
         )
 
     def on_system(self, subtype: str, data: dict[str, Any]) -> None:
+        if subtype == "init" and self._on_sdk_session_id is not None:
+            sdk_uuid = data.get("session_id")
+            if isinstance(sdk_uuid, str) and sdk_uuid:
+                self._on_sdk_session_id(sdk_uuid)
         self._emit("system", subtype=subtype, data=data)
 
     def on_result(
