@@ -37,10 +37,10 @@ def _new_id() -> str:
 class OutputMeta:
     """Spec §8.2 — `outputs/<id>/meta.json` shape."""
 
-    id: str                              # output_id "out_<16hex>"
-    kind: str                            # "standalone" only in this registry
+    id: str  # output_id "out_<16hex>"
+    kind: str  # "standalone" only in this registry
     title: str
-    filename: str                        # name on disk under outputs/<id>/
+    filename: str  # name on disk under outputs/<id>/
     mime: str
     size_bytes: int
     source_session_id: str | None = None

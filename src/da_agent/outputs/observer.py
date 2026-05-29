@@ -1,9 +1,14 @@
 """OutputsObserver — parallel to `TodoStore` (spec §8.2, §8.4).
 
 Watches Write/Edit/Bash tool calls; on tool_result without error, classifies
-the input.file_path or Bash command for paths under `outputs_dir/<id>/` or
-`kb_dir/<kb_id>/versions/v<N>.xlsx`. Emits a detection through `on_detect`;
-the runner bridges that into the async registry + UI.
+the input.file_path or Bash command for paths under one of three layouts:
+
+  outputs/<out_id>/<filename>                       -> standalone
+  kb/<kb_id>/versions/v_(curr|prev).<ext>           -> kb_version
+  attachments/<sid>/<att_id>/versions/v_(curr|prev) -> attachment_version
+
+Emits a detection through `on_detect`; the runner bridges that into the
+async registry + UI.
 
 Conservative by design: ambiguous matches are dropped silently. Better to
 under-register than mis-register (Anti-Pattern §13).
@@ -16,7 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-_VERSION_FILE_RE = re.compile(r"^v(\d+)\.xlsx$")
+# v_curr / v_prev with the common spreadsheet/CSV-family extensions. Kept
+# narrow to avoid mis-classifying non-output files (e.g. helper sidecars).
+_VERSION_FILE_RE = re.compile(r"^v_(curr|prev)\.(xlsx|xlsm|xls|csv|tsv)$")
 # Bash: `> path` redirection or an `--output` flag. Conservative: only flags
 # we know mean "output target".
 _BASH_REDIR_RE = re.compile(r"(?:>\s*|--output[= ])(\S+)")
@@ -25,15 +32,26 @@ _WRITE_TOOLS = {"Write", "Edit", "NotebookEdit"}
 
 @dataclass(slots=True)
 class OutputDetection:
-    """Either a standalone (`outputs/<id>/<filename>`) or a KB version
-    (`kb/<kb_id>/versions/v<N>.xlsx`)."""
+    """One of three kinds (spec §8.2):
 
-    kind: Literal["standalone", "kb_version"]
+    - `standalone`         (`outputs/<out_id>/<filename>`)
+    - `kb_version`         (`kb/<kb_id>/versions/v_(curr|prev).<ext>`)
+    - `attachment_version` (`attachments/<sid>/<att_id>/versions/v_(curr|prev).<ext>`)
+    """
+
+    kind: Literal["standalone", "kb_version", "attachment_version"]
     file_path: Path
-    output_id: str | None = None              # standalone — outputs dir name
-    filename: str | None = None               # standalone — relative path under <id>/
-    kb_id: str | None = None                  # kb_version
-    version: str | None = None                # "v<N>"
+    # standalone — outputs dir name and relative filename
+    output_id: str | None = None
+    filename: str | None = None
+    # kb_version — owning kb_id and slot ("v_curr" | "v_prev")
+    kb_id: str | None = None
+    # attachment_version — owning session + attachment ids
+    session_id: str | None = None
+    attachment_id: str | None = None
+    # version slot string ("v_curr" | "v_prev"); shared by kb_version and
+    # attachment_version kinds.
+    version: str | None = None
 
 
 class OutputsObserver:
@@ -41,10 +59,12 @@ class OutputsObserver:
         self,
         outputs_dir: Path,
         kb_dir: Path,
+        attachments_dir: Path,
         on_detect: Callable[[OutputDetection], None],
     ) -> None:
         self._outputs_dir = outputs_dir.resolve()
         self._kb_dir = kb_dir.resolve()
+        self._attachments_dir = attachments_dir.resolve()
         self._on_detect = on_detect
         # Per-turn pending tool_use entries (input was Write/Edit/Bash).
         # Cleared on `reset()`.
@@ -121,11 +141,31 @@ class OutputsObserver:
                 and parts[1] == "versions"
                 and _VERSION_FILE_RE.match(parts[2])
             ):
+                slot = parts[2].split(".", 1)[0]  # "v_curr" or "v_prev"
                 return OutputDetection(
                     kind="kb_version",
                     file_path=resolved,
                     kb_id=parts[0],
-                    version=parts[2].rsplit(".", 1)[0],
+                    version=slot,
+                )
+            return None
+        if _is_under(resolved, self._attachments_dir):
+            rel = resolved.relative_to(self._attachments_dir)
+            parts = rel.parts
+            # attachments/<sid>/<att_id>/versions/v_(curr|prev).<ext>
+            if (
+                len(parts) == 4
+                and parts[2] == "versions"
+                and parts[1].startswith("att_")
+                and _VERSION_FILE_RE.match(parts[3])
+            ):
+                slot = parts[3].split(".", 1)[0]
+                return OutputDetection(
+                    kind="attachment_version",
+                    file_path=resolved,
+                    session_id=parts[0],
+                    attachment_id=parts[1],
+                    version=slot,
                 )
         return None
 
