@@ -35,7 +35,7 @@ async def run_chat(settings: Settings) -> None:
     ui = ConsoleAgentUI()
     ui.console.print(_BANNER, style="grey62")
     ui.console.print(
-        f"KB: {settings.kb_dir}   workspace: {settings.workspace_dir}", style="grey62"
+        f"KB: {settings.kb_dir}   outputs: {settings.outputs_dir}", style="grey62"
     )
 
     session: PromptSession = PromptSession()
@@ -84,7 +84,7 @@ async def run_demo(settings: Settings) -> None:
         "1. Profile both sheets (types, ranges, data quality)\n"
         "2. Join Orders→Customers; aggregate revenue by segment and month\n"
         "3. Test whether the North region's Q2 dip is significant\n"
-        "4. Produce a summary sheet + charts in the workspace"
+        "4. Produce a summary sheet + charts as a new .xlsx output"
     )
     if not decision.approved:
         ui.on_text(f"Revising based on feedback: {decision.feedback}")
@@ -128,13 +128,15 @@ async def run_demo(settings: Settings) -> None:
                     header="Output",
                     options=[
                         Option(
-                            "New .xlsx in workspace",
+                            "New .xlsx",
                             "A standalone file you can download",
                         ),
                         Option(
-                            "New sheet in sales.xlsx", "Append to the source workbook"
+                            "New sheet", "Append a new sheet to the source workbook"
                         ),
-                        Option("Edit in place", "Modify the existing sheet"),
+                        Option(
+                            "Pick sheet", "Overwrite a specific sheet of the source"
+                        ),
                     ],
                     multi_select=False,
                     allow_other=True,
@@ -145,14 +147,15 @@ async def run_demo(settings: Settings) -> None:
     ui.on_text(f"Got it — {resp.to_model_text()}.")
     ui.on_tool_use("Skill", {"name": "xlsx"})
     ui.on_tool_use(
-        "Write", {"file_path": str(settings.workspace_dir / "sales_insights.xlsx")}
+        "Write",
+        {"file_path": str(settings.outputs_dir / "out_demo" / "sales_insights.xlsx")},
     )
     ui.on_tool_result(
         "Wrote sales_insights.xlsx (3 sheets, 2 charts, 0 formula errors)."
     )
     ui.on_text(
         "Done. Key findings: Enterprise drives 61% of revenue; the North region's Q2 dip is "
-        "statistically significant. Output: workspace/sales_insights.xlsx"
+        "statistically significant. Output: outputs/out_demo/sales_insights.xlsx"
     )
     ui.on_todos(
         _with_status(todos, {i: TodoStatus.COMPLETED for i in range(len(todos))})

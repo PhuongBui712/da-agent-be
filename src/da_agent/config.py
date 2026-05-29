@@ -85,7 +85,15 @@ class Settings:
 
     @property
     def workspace_dir(self) -> Path:
-        """Where the agent writes generated artifacts (new .xlsx, charts, etc.)."""
+        """DEPRECATED — never expose to the agent.
+
+        Retained as an importable property for backward compatibility with any
+        external consumer. The directory is no longer created by `ensure_dirs`,
+        is no longer in `ClaudeAgentOptions.add_dirs`, and is no longer
+        referenced by the system prompt. Spec §8.2 routes all writes through
+        `outputs_dir` (standalone) or `kb_dir/<id>/versions/` (KB-bound) or
+        `attachments_dir/<sid>/<att_id>/versions/` (attachment-bound).
+        """
         return self.data_root / "workspace"
 
     @property
@@ -111,7 +119,6 @@ class Settings:
         for d in (
             self.data_root,
             self.kb_dir,
-            self.workspace_dir,
             self.sessions_dir,
             self.outputs_dir,
             self.attachments_dir,
