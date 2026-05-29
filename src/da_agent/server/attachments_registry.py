@@ -12,7 +12,7 @@ import json
 import shutil
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ def _new_id() -> str:
 class AttachmentMeta:
     id: str
     session_id: str
-    filename: str       # sanitized, no path separators
+    filename: str  # sanitized, no path separators
     size_bytes: int
     mime: str
     uploaded_at: float

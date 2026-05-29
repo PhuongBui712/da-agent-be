@@ -3,6 +3,10 @@
 Short-term attachments are scoped to a session and deleted with it (spec §5.3).
 Files are streamed to a tmp path then renamed so partial uploads never appear
 at the final path.
+
+Spec §8.2 — attachments support symmetric 2-slot versioning identical to KB:
+on disk under `attachments/<sid>/<att_id>/versions/v_curr.<ext>` and
+`v_prev.<ext>`. The download endpoint at the bottom serves both slots.
 """
 
 from __future__ import annotations
@@ -13,11 +17,15 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse
 
 from ..schemas import AttachmentListResponse, AttachmentResponse
 from ..state import AppState
 
 router = APIRouter(prefix="/sessions", tags=["attachments"])
+
+_VERSION_FILE_RE = re.compile(r"^v_(curr|prev)\.(xlsx|xlsm|xls|csv|tsv)$")
+_VERSION_SLOT_RE = re.compile(r"^v_(curr|prev)$")
 
 # Copy of the pattern from routes/kb.py — intentionally NOT imported from there
 # to keep the two modules independent (spec §11).
@@ -48,6 +56,7 @@ def _meta_to_response(meta) -> AttachmentResponse:
 # --------------------------------------------------------------------------- #
 # Endpoints (spec §5.3)
 # --------------------------------------------------------------------------- #
+
 
 @router.post(
     "/{sid}/attachments",
@@ -130,3 +139,43 @@ async def delete_attachment(
     att_dir = state.attachments.path_for(meta).parent
     if att_dir.exists():
         await asyncio.to_thread(shutil.rmtree, str(att_dir), True)
+
+
+def _find_attachment_version(versions_dir: Path, slot: str) -> Path | None:
+    if not versions_dir.exists():
+        return None
+    for entry in versions_dir.iterdir():
+        m = _VERSION_FILE_RE.match(entry.name)
+        if m is None:
+            continue
+        if f"v_{m.group(1)}" == slot:
+            return entry
+    return None
+
+
+@router.get("/{sid}/attachments/{att_id}/versions/{version}/download")
+async def download_attachment_version(
+    sid: str,
+    att_id: str,
+    version: str,
+    state: AppState = Depends(get_state),
+) -> FileResponse:
+    if await state.registry.get(sid) is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    meta = await state.attachments.get(sid, att_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="attachment not found")
+    if not _VERSION_SLOT_RE.match(version):
+        raise HTTPException(
+            status_code=400,
+            detail="invalid version slot; expected v_curr or v_prev",
+        )
+    versions_dir = state.attachments.path_for(meta).parent / "versions"
+    file_path = _find_attachment_version(versions_dir, version)
+    if file_path is None:
+        raise HTTPException(status_code=404, detail="version not found on disk")
+    return FileResponse(
+        path=file_path,
+        media_type=meta.mime,
+        filename=f"{att_id}_{version}{file_path.suffix}",
+    )
