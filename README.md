@@ -48,6 +48,42 @@ da-agent           # or: da-agent chat
 Optional: install **LibreOffice** so the xlsx skill can recalculate formulas
 (`scripts/recalc.py`).
 
+## Run with Docker (backend + frontend)
+
+Package the whole stack so another machine only needs Docker + a token. The
+backend image bundles Python, Node, and the `claude` CLI (the SDK spawns it as a
+subprocess), so nothing needs installing by hand.
+
+```bash
+# from da-agent-be/  (expects ../da-agent-fe alongside it)
+cp .env.docker.example .env     # then fill in ANTHROPIC_AUTH_TOKEN
+docker compose up --build
+```
+
+- FE → http://localhost:3000  ·  BE → http://localhost:8765
+- KB / sessions / outputs / attachments persist in the `da-agent-data` volume.
+- Credentials are read from `.env` at runtime — never baked into the images.
+
+**LibreOffice (formula recalc):** off by default to keep the image small. Enable
+with `docker compose build --build-arg INSTALL_LIBREOFFICE=1 backend` (or flip
+the arg in `docker-compose.yml`).
+
+### Run on another host (not localhost)
+
+The FE bakes its backend URL at build time and the BE allow-lists FE origins, so
+two values must match the host you serve from:
+
+```bash
+# in .env:
+VITE_API_BASE_URL=http://<host>:8765       # FE → BE (baked into FE build)
+DA_AGENT_CORS_ORIGINS=http://<host>:3000   # BE accepts this FE origin
+
+docker compose up --build
+```
+
+`DA_AGENT_CORS_ORIGINS` is comma-separated; unset, it defaults to
+`http://127.0.0.1:3000,http://localhost:3000`.
+
 ### Commands & flags
 - `da-agent` / `da-agent chat` — interactive multi-turn session
 - `da-agent demo` — scripted walkthrough of the TUI (no API key)

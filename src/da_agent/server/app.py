@@ -18,6 +18,22 @@ from .routes import sessions as sessions_routes
 from .state import AppState
 
 
+_DEFAULT_CORS_ORIGINS = ["http://127.0.0.1:3000", "http://localhost:3000"]
+
+
+def _cors_origins() -> list[str]:
+    """Allowed browser origins for the FE.
+
+    Defaults to the local dev/Docker FE on port 3000. Override with
+    `DA_AGENT_CORS_ORIGINS` (comma-separated) when serving the FE from a
+    different host/port.
+    """
+    raw = os.getenv("DA_AGENT_CORS_ORIGINS")
+    if not raw:
+        return _DEFAULT_CORS_ORIGINS
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.ensure_dirs()
@@ -50,7 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="DA-Agent", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
+        allow_origins=_cors_origins(),
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
