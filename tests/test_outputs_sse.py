@@ -236,17 +236,16 @@ async def test_write_under_outputs_dir_emits_output_created(app, client):
         assert payload["download_url"] == "/outputs/out_abc123"
 
 
-async def test_write_under_kb_versions_emits_output_created_kb_version(
-    app, client
-):
+async def test_write_under_kb_versions_emits_output_created_kb_version(app, client):
+    """Spec §8.2 — a write to `kb/<id>/versions/v_curr.xlsx` emits SSE."""
     create = await client.post("/sessions", json={"name": "kbv-sse"})
     sid = create.json()["id"]
 
     state = app.state.app_state
     versions_dir = state.settings.kb_dir / "kb_xyz" / "versions"
     versions_dir.mkdir(parents=True, exist_ok=True)
-    target = versions_dir / "v2.xlsx"
-    payload = b"PK\x03\x04 v2"
+    target = versions_dir / "v_curr.xlsx"
+    payload = b"PK\x03\x04 latest"
 
     def write_file(_fc):
         target.write_bytes(payload)
@@ -275,21 +274,21 @@ async def test_write_under_kb_versions_emits_output_created_kb_version(
 
     original = _install_script(script)
     try:
-        events = await _post_message_events(client, sid, "make a v2")
+        events = await _post_message_events(client, sid, "make a new revision")
     finally:
         _restore_init(original)
 
     # Sidecar should land best-effort.
-    sidecar = versions_dir / "v2.meta.json"
+    sidecar = versions_dir / "v_curr.meta.json"
     for _ in range(50):
         if sidecar.exists():
             break
         await asyncio.sleep(0.01)
 
-    assert sidecar.exists(), "sidecar v2.meta.json should be written"
+    assert sidecar.exists(), "sidecar v_curr.meta.json should be written"
     sidecar_data = json.loads(sidecar.read_text("utf-8"))
-    assert sidecar_data["version"] == "v2"
-    assert sidecar_data["parent_version"] == "v1"  # version_n=2 -> v1
+    assert sidecar_data["version"] == "v_curr"
+    assert sidecar_data["parent_version"] == "v_prev"
     assert sidecar_data["kind"] == "kb_version"
     assert sidecar_data["source_session_id"] == sid
 
@@ -300,4 +299,68 @@ async def test_write_under_kb_versions_emits_output_created_kb_version(
         _, p = output_events[0]
         assert p["kind"] == "kb_version"
         assert p["kb_id"] == "kb_xyz"
-        assert p["version"] == "v2"
+        assert p["version"] == "v_curr"
+
+
+async def test_write_under_attachment_versions_emits_output_created(app, client):
+    """Spec §8.2 — symmetric attachment-version detection + SSE."""
+    create = await client.post("/sessions", json={"name": "att-sse"})
+    sid = create.json()["id"]
+
+    state = app.state.app_state
+    versions_dir = state.settings.attachments_dir / sid / "att_42" / "versions"
+    versions_dir.mkdir(parents=True, exist_ok=True)
+    target = versions_dir / "v_curr.xlsx"
+    payload = b"PK\x03\x04 attachment-edit"
+
+    def write_file(_fc):
+        target.write_bytes(payload)
+
+    script = [
+        AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tu_att1",
+                    name="Write",
+                    input={"file_path": str(target)},
+                )
+            ],
+            model="fake",
+        ),
+        write_file,
+        UserMessage(
+            content=[
+                ToolResultBlock(
+                    tool_use_id="tu_att1",
+                    content="File written",
+                    is_error=False,
+                )
+            ]
+        ),
+        _result_message(),
+    ]
+
+    original = _install_script(script)
+    try:
+        events = await _post_message_events(client, sid, "edit my attachment")
+    finally:
+        _restore_init(original)
+
+    sidecar = versions_dir / "v_curr.meta.json"
+    for _ in range(50):
+        if sidecar.exists():
+            break
+        await asyncio.sleep(0.01)
+
+    assert sidecar.exists(), "attachment_version sidecar should be written"
+    sidecar_data = json.loads(sidecar.read_text("utf-8"))
+    assert sidecar_data["kind"] == "attachment_version"
+    assert sidecar_data["version"] == "v_curr"
+
+    output_events = [(t, p) for t, p in events if t == "output.created"]
+    if output_events:
+        _, p = output_events[0]
+        assert p["kind"] == "attachment_version"
+        assert p["session_id"] == sid
+        assert p["attachment_id"] == "att_42"
+        assert p["version"] == "v_curr"
