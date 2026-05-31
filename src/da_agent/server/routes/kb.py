@@ -1,9 +1,9 @@
-"""KB CRUD: upload, list, get meta, get manifest, delete.
+"""KB CRUD: upload, list, get meta, get memory, reprofile, delete.
 
 Upload is multipart -- the request streams the file to disk in an executor
-thread, then schedules the preprocessing pipeline as a fire-and-forget
-asyncio task and returns 202 immediately. Status transitions are surfaced
-on subsequent GETs (FE polls; SSE for KB status is open question §14).
+thread, then schedules the new memory-driven ingestion pipeline (kb_profiler
+subagent) as a fire-and-forget asyncio task and returns 202 immediately.
+Status transitions are surfaced on subsequent GETs.
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 
-from ...kb import read_manifest, run_pipeline
+from ...ingestion import run_pipeline
 from ..schemas import (
     KbFileListResponse,
     KbFileResponse,
+    KbMemoryResponse,
     KbVersionListResponse,
     KbVersionResponse,
 )
@@ -57,6 +58,7 @@ def _meta_to_response(meta) -> KbFileResponse:
         created_at=meta.created_at,
         updated_at=meta.updated_at,
         error=meta.error,
+        memory_path=getattr(meta, "memory_path", None),
     )
 
 
@@ -117,9 +119,16 @@ async def upload_kb_file(
         tmp_path.unlink(missing_ok=True)
         raise
 
-    # Fire-and-forget pipeline. Tracked so shutdown can cancel cleanly.
+    # Fire-and-forget memory-driven pipeline. Tracked so shutdown can cancel
+    # cleanly. The runner serialises opus calls via a global semaphore so the
+    # actual work may queue here, but the HTTP response returns immediately.
     task = asyncio.create_task(
-        run_pipeline(registry=state.kb, kb_root=kb_root, kb_id=meta.id)
+        run_pipeline(
+            registry=state.kb,
+            settings=state.settings,
+            kb_root=kb_root,
+            kb_id=meta.id,
+        )
     )
     state.track_kb_task(task)
 
@@ -148,19 +157,117 @@ async def get_kb_file(
 async def get_kb_manifest(
     kb_id: str, state: AppState = Depends(get_state)
 ) -> JSONResponse:
+    """Deprecated: the manifest pipeline was replaced by memory-driven
+    ingestion. Returns 410 Gone with a pointer to /memory.
+
+    The 404 path (kb not found) takes precedence so callers cannot use the
+    410 to probe for kb_id existence.
+    """
     meta = await state.kb.get(kb_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="kb file not found")
-    if meta.status != "READY":
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "error": "manifest endpoint deprecated; use GET /kb/files/{id}/memory",
+            "memory_endpoint": f"/kb/files/{kb_id}/memory",
+        },
+    )
+
+
+@router.get("/files/{kb_id}/memory", response_model=KbMemoryResponse)
+async def get_kb_memory(
+    kb_id: str, state: AppState = Depends(get_state)
+) -> KbMemoryResponse:
+    """Return the per-KB memory note written by the kb_profiler subagent.
+
+    409 if the KB is still PENDING/PROFILING.
+    404 if the KB is READY_PARTIAL/FAILED with no memory file on disk.
+    """
+    meta = await state.kb.get(kb_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="kb file not found")
+    if meta.status in {"PENDING", "PROFILING"}:
         raise HTTPException(
             status_code=409,
-            detail=f"manifest unavailable; status={meta.status}",
+            detail=f"memory unavailable; status={meta.status}",
         )
-    manifest_path = state.settings.kb_dir / kb_id / "manifest.json"
-    if not manifest_path.exists():
-        raise HTTPException(status_code=404, detail="manifest file missing on disk")
-    payload = await asyncio.to_thread(read_manifest, manifest_path)
-    return JSONResponse(content=payload)
+    candidate: Path | None = (
+        Path(meta.memory_path) if getattr(meta, "memory_path", None) else None
+    )
+    if candidate is None:
+        candidate = state.settings.kb_profiler_memory_dir / f"{kb_id}.md"
+    if not candidate.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"memory file missing on disk for kb {kb_id} "
+                f"(status={meta.status}); use POST /reprofile to rebuild"
+            ),
+        )
+    content = await asyncio.to_thread(candidate.read_text, "utf-8")
+    return KbMemoryResponse(
+        kb_id=kb_id,
+        path=str(candidate),
+        content=content,
+        size_bytes=len(content.encode("utf-8")),
+    )
+
+
+@router.post(
+    "/files/{kb_id}/reprofile",
+    response_model=KbFileResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def reprofile_kb_file(
+    kb_id: str, state: AppState = Depends(get_state)
+) -> KbFileResponse:
+    """Manually re-run the ingestion pipeline against an existing KB.
+
+    Used to: (a) backfill memory for legacy KBs ingested by the old
+    manifest pipeline, (b) recover from READY_PARTIAL after the original
+    profile failed, (c) regenerate when the user wants a fresh note.
+
+    409 if a profile is already in flight (status PROFILING).
+    """
+    meta = await state.kb.get(kb_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="kb file not found")
+    if meta.status == "PROFILING":
+        raise HTTPException(
+            status_code=409,
+            detail=f"kb {kb_id} is already PROFILING; wait for it to settle",
+        )
+    raw_path = state.settings.kb_dir / kb_id / "raw.xlsx"
+    if not raw_path.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"kb {kb_id} has no raw.xlsx on disk; cannot reprofile",
+        )
+    # Clear memory_path AND eagerly transition to PENDING so polling clients
+    # see the in-flight state immediately. The runner will flip it to
+    # PROFILING → READY/READY_PARTIAL.
+    await state.kb.clear_memory_path(kb_id)
+    await state.kb.update_status(kb_id, "PENDING")
+    # Delete the existing memory file BEFORE scheduling. The profiler
+    # subagent's stopping condition is "the file exists"; if we leave the
+    # old file in place the LLM may short-circuit without rewriting on a
+    # reprofile. Removing it forces a real new write (or, on failure, a
+    # clean READY_PARTIAL with no stale content).
+    existing_memory = state.settings.kb_profiler_memory_dir / f"{kb_id}.md"
+    if existing_memory.exists():
+        await asyncio.to_thread(existing_memory.unlink, missing_ok=True)
+    task = asyncio.create_task(
+        run_pipeline(
+            registry=state.kb,
+            settings=state.settings,
+            kb_root=state.settings.kb_dir,
+            kb_id=kb_id,
+        )
+    )
+    state.track_kb_task(task)
+    refreshed = await state.kb.get(kb_id)
+    return _meta_to_response(refreshed if refreshed is not None else meta)
 
 
 @router.delete("/files/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -172,6 +279,13 @@ async def delete_kb_file(kb_id: str, state: AppState = Depends(get_state)) -> No
     kb_dir = state.settings.kb_dir / kb_id
     if kb_dir.exists():
         await asyncio.to_thread(shutil.rmtree, str(kb_dir), True)
+    # Clean the per-KB memory note if the profiler ever wrote one. We
+    # intentionally do NOT touch MEMORY.md here — the kb_profiler subagent
+    # is responsible for curating its own index, and a stale entry is
+    # harmless (it just refers to a missing file).
+    memory_file = state.settings.kb_profiler_memory_dir / f"{kb_id}.md"
+    if memory_file.exists():
+        await asyncio.to_thread(memory_file.unlink, missing_ok=True)
 
 
 # --------------------------------------------------------------------------- #
