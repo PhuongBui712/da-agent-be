@@ -1,9 +1,9 @@
-"""Phase C 2026-05-31 — DELETE /sessions/<sid> wipes per-session outputs subtree.
+"""Phase A 2026-06-01 — DELETE /sessions/<sid> wipes per-session outputs subtree.
 
 The route handler in `server/routes/sessions.py` calls
 `state.outputs.delete_session_outputs(sid)` after the registry delete, which
 should:
-  * remove every `outputs/<sid>/<out_id>/` directory belonging to that session
+  * remove `outputs/<sid>/` and all files belonging to that session
   * drop matching rows from `outputs/registry.json`
   * leave outputs from other sessions untouched
 
@@ -52,10 +52,10 @@ async def client(app):
 # Helpers
 # --------------------------------------------------------------------------- #
 async def _register_output_in(app, *, session_id: str, suffix: str = ""):
-    """Register one standalone output under `outputs/<session_id>/<out>/...`.
+    """Register one standalone output under `outputs/<session_id>/`.
 
-    Returns the resulting `OutputMeta`. Reuses the registry's own move semantics
-    so the on-disk layout matches production exactly.
+    Phase A 2026-06-01: flat layout — no `<output_id>` subdirectory.
+    Returns the resulting `OutputMeta`.
     """
     state = app.state.app_state
     tmp_dir = state.settings.outputs_dir / "_tmp"
@@ -64,11 +64,10 @@ async def _register_output_in(app, *, session_id: str, suffix: str = ""):
     src.write_bytes(b"PK\x03\x04 fake")
     return await state.outputs.register_standalone(
         session_id=session_id,
-        src_path=src,
-        title=f"Report for {session_id}",
-        filename=f"report_{session_id}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        source_session_id=session_id,
+        file_path=src,
+        filename=f"report_{session_id}{suffix}.xlsx",
+        kind="standalone",
+        source_id=None,
     )
 
 
@@ -85,8 +84,9 @@ async def test_delete_session_wipes_only_that_sessions_outputs(client, app):
     out_b = await _register_output_in(app, session_id=b.id)
 
     outputs_root = state.settings.outputs_dir
-    assert (outputs_root / a.id / out_a.id).is_dir()
-    assert (outputs_root / b.id / out_b.id).is_dir()
+    # Phase A layout: data file directly under outputs/<sid>/
+    assert (outputs_root / a.id / out_a.filename).is_file()
+    assert (outputs_root / b.id / out_b.filename).is_file()
     pre_listing = await state.outputs.list()
     assert {m.id for m in pre_listing} == {out_a.id, out_b.id}
 
@@ -95,7 +95,7 @@ async def test_delete_session_wipes_only_that_sessions_outputs(client, app):
 
     # A's subtree is gone; B's is untouched.
     assert not (outputs_root / a.id).exists()
-    assert (outputs_root / b.id / out_b.id).is_dir()
+    assert (outputs_root / b.id / out_b.filename).is_file()
 
     # Registry only has B's row.
     post_listing = await state.outputs.list()

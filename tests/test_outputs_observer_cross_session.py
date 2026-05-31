@@ -1,7 +1,7 @@
-"""Cross-session isolation tests for OutputsObserver (Phase C 2026-05-31).
+"""Cross-session isolation tests for OutputsObserver (Phase A 2026-06-01).
 
 The observer is bound to ONE session_id at construction and only fires for
-paths under `outputs/<that_session_id>/<out_*>/<filename>`. Writes that
+paths that are direct children of `outputs/<that_session_id>/`. Writes that
 target a different session's outputs subtree, or the legacy flat
 `outputs/<out_*>/...` layout (no session prefix), must be silently ignored.
 
@@ -44,10 +44,8 @@ def test_write_under_other_session_does_not_fire(make_observer):
     """Observer for session A must ignore writes into session B's outputs dir."""
     obs, events, outputs_dir = make_observer("sess_a")
 
-    # The other session's directory exists on disk (this can happen in real
-    # life since /outputs/ is shared across sessions). Writing into it
-    # bypasses the per-session observer.
-    other = outputs_dir / "sess_b" / "out_xxxx" / "report.xlsx"
+    # Phase A layout: direct child of outputs/<sid>/
+    other = outputs_dir / "sess_b" / "report.xlsx"
     other.parent.mkdir(parents=True, exist_ok=True)
     obs.observe_tool_use("u1", "Write", {"file_path": str(other)})
     obs.observe_tool_result("u1", "ok", False)
@@ -56,10 +54,10 @@ def test_write_under_other_session_does_not_fire(make_observer):
 
 
 def test_write_under_legacy_flat_layout_does_not_fire(make_observer):
-    """Pre-Phase-C `outputs/<out_*>/<filename>` (no session prefix) is rejected.
+    """Pre-Phase-A `outputs/<out_*>/<filename>` (no session prefix) is rejected.
 
     Even though the directory matches the old shape, the new observer only
-    matches under `outputs/<session_id>/<out_*>/...`, so the path is
+    matches direct children of `outputs/<session_id>/`, so the path is
     classified as not-an-output and dropped.
     """
     obs, events, outputs_dir = make_observer("sess_a")
@@ -76,7 +74,7 @@ def test_bash_redirect_under_other_session_does_not_fire(make_observer):
     """Same isolation rule for `>` / `--output` redirections."""
     obs, events, outputs_dir = make_observer("sess_a")
 
-    other = outputs_dir / "sess_b" / "out_yyyy" / "out.csv"
+    other = outputs_dir / "sess_b" / "out.csv"
     obs.observe_tool_use(
         "u1", "Bash", {"command": f"python build.py --output {other}"}
     )

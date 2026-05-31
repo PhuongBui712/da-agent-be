@@ -49,11 +49,9 @@ async def _register_output(
 ):
     """Drop a file into outputs_dir/_tmp/, then register it via the registry.
 
-    Phase C 2026-05-31: `session_id` is required by the registry layout
-    (`outputs/<session_id>/<output_id>/<filename>`). We default to
-    `sess_default` when the caller doesn't care which session owns the row.
-    `source_session_id` is passed through unchanged so existing assertions
-    on filterable provenance continue to work.
+    Phase A 2026-06-01: layout is `outputs/<session_id>/<filename>`. We
+    default to `sess_default` when the caller doesn't care which session
+    owns the row.
     """
     state = app.state.app_state
     tmp_dir = state.settings.outputs_dir / "_tmp"
@@ -63,11 +61,10 @@ async def _register_output(
     layout_sid = session_id or "sess_default"
     meta = await state.outputs.register_standalone(
         session_id=layout_sid,
-        src_path=src,
-        title="My report",
+        file_path=src,
         filename="report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        source_session_id=session_id,
+        kind="standalone",
+        source_id=None,
     )
     return meta
 
@@ -89,8 +86,28 @@ async def test_list_outputs_returns_registered_entry(client, app):
     assert len(items) == 1
     assert items[0]["output_id"] == meta.id
     assert items[0]["kind"] == "standalone"
-    assert items[0]["title"] == "My report"
     assert items[0]["filename"] == "report.xlsx"
+
+
+async def test_get_outputs_includes_download_url(client, app):
+    """Phase A 2026-06-01: REST list/meta surfaces `download_url` so the FE
+    can render persistent download cards from session replay alone."""
+    a = await _register_output(app, session_id="sess_dl_a")
+    b = await _register_output(app, session_id="sess_dl_b")
+
+    r = await client.get("/outputs")
+    assert r.status_code == 200
+    items = r.json()["outputs"]
+    assert len(items) >= 2
+    by_id = {item["output_id"]: item for item in items}
+    for oid in (a.id, b.id):
+        assert "download_url" in by_id[oid]
+        assert by_id[oid]["download_url"] == f"/outputs/{oid}"
+
+    # /meta endpoint surfaces it too.
+    meta_r = await client.get(f"/outputs/{a.id}/meta")
+    assert meta_r.status_code == 200
+    assert meta_r.json()["download_url"] == f"/outputs/{a.id}"
 
 
 async def test_list_outputs_filters_by_session_id(client, app):
@@ -130,14 +147,16 @@ async def test_download_output_returns_file_bytes(client, app):
     assert "spreadsheetml" in r.headers["content-type"]
 
 
-async def test_delete_output_removes_entry_and_dir(client, app):
+async def test_delete_output_removes_entry_and_files(client, app):
+    """Phase A 2026-06-01: delete removes data file and sidecar, not a directory."""
     meta = await _register_output(app)
-    # Phase C 2026-05-31: layout is `outputs/<session_id>/<output_id>/`.
-    # `_register_output` defaults `session_id` to "sess_default" when the
-    # caller doesn't pass one, and that's the layout key the registry uses.
-    settings = app.state.app_state.settings
-    out_dir = settings.outputs_dir / "sess_default" / meta.id
-    assert out_dir.exists()
+    state = app.state.app_state
+    settings = state.settings
+    # data file and sidecar both live under outputs/<session_id>/
+    data_file = settings.outputs_dir / "sess_default" / "report.xlsx"
+    sidecar = settings.outputs_dir / "sess_default" / f".{meta.id}.meta.json"
+    assert data_file.exists()
+    assert sidecar.exists()
 
     r = await client.delete(f"/outputs/{meta.id}")
     assert r.status_code == 204
@@ -146,8 +165,9 @@ async def test_delete_output_removes_entry_and_dir(client, app):
     miss = await client.get(f"/outputs/{meta.id}/meta")
     assert miss.status_code == 404
 
-    # On-disk dir is gone.
-    assert not out_dir.exists()
+    # On-disk files are gone.
+    assert not data_file.exists()
+    assert not sidecar.exists()
 
 
 async def test_meta_unknown_id_returns_404(client):
