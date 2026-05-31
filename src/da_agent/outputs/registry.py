@@ -1,18 +1,17 @@
 """Outputs registry — `outputs/registry.json` mirrors `KbRegistry`.
 
 Standalone outputs only (kind=standalone). KB-bound and attachment-bound
-writes are also routed under this layout (Phase C 2026-05-31 — Golden Rule 4
-broken per user approval); the legacy `kb/<kb_id>/versions/` and
-`attachments/<sid>/<att_id>/versions/` chains are no longer written to.
+writes are routed through this same registry; the legacy
+`kb/<kb_id>/versions/` and `attachments/<sid>/<att_id>/versions/` chains are
+no longer written to.
 
-Layout (Phase C 2026-05-31):
+Layout (Phase A 2026-06-01 — flat per-session):
 
     outputs/
       registry.json                   # this file
       <session_id>/
-        <output_id>/
-          <filename>                  # the actual bytes
-          meta.json                   # sidecar mirroring the registry row
+        <filename>                    # the actual bytes
+        .<output_id>.meta.json        # sidecar mirroring the registry row
 """
 
 from __future__ import annotations
@@ -20,18 +19,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import re
+import secrets
 import shutil
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# `out_<16hex>` — matches `_new_id` and the route layer's `_new_output_id`.
+# `out_<16hex>` — matches the route layer's `_new_output_id`.
 _OUTPUT_ID_RE = re.compile(r"^out_[0-9a-f]{16}$")
+_SIDECAR_RE = re.compile(r"^\.out_[0-9a-f]{16}\.meta\.json$")
 
 
 def _now() -> float:
@@ -39,72 +40,76 @@ def _now() -> float:
 
 
 def _new_id() -> str:
-    return f"out_{uuid.uuid4().hex[:16]}"
+    return f"out_{secrets.token_hex(8)}"
 
 
 @dataclass(slots=True)
 class OutputMeta:
-    """Spec §8.2 — `outputs/<session_id>/<id>/meta.json` shape.
+    """One row in `outputs/registry.json`.
 
-    `session_id` is the layout key (which session's directory the file lives
-    under). `source_session_id` is the spec §8.2 schema field — for files
-    minted in this layout they are always equal, but we keep both so the
-    schema stays stable for future fork/import scenarios.
+    On-disk file lives at `<root>/<session_id>/<filename>`; sidecar lives at
+    `<root>/<session_id>/.<output_id>.meta.json`.
     """
 
     id: str  # output_id "out_<16hex>"
     kind: str  # "standalone" only in this registry
-    title: str
-    filename: str  # name on disk under outputs/<session_id>/<id>/
-    mime: str
+    filename: str  # name on disk under outputs/<session_id>/
     size_bytes: int
-    session_id: str | None = None  # layout key
-    source_session_id: str | None = None  # spec §8.2 provenance field
-    source_kb_ids: list[str] = field(default_factory=list)
+    session_id: str  # layout key
+    source_id: str | None = None  # optional source kb_id / att_id
     created_at: float = field(default_factory=_now)
+    # Derived/back-compat fields (kept so the HTTP routes don't need to change
+    # in this phase). `title` defaults to `filename`; `mime` is guessed.
+    title: str = ""
+    mime: str = "application/octet-stream"
+    source_session_id: str | None = None
+    source_kb_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "output_id": self.id,
             "kind": self.kind,
-            "title": self.title,
+            "title": self.title or self.filename,
             "filename": self.filename,
             "mime": self.mime,
             "size_bytes": self.size_bytes,
             "session_id": self.session_id,
-            "source_session_id": self.source_session_id,
+            "source_id": self.source_id,
+            "source_session_id": self.source_session_id or self.session_id,
             "source_kb_ids": list(self.source_kb_ids),
             "created_at": self.created_at,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "OutputMeta":
-        # Legacy rows (pre-Phase-C) lack `session_id`; fall back to
-        # `source_session_id` so the row remains addressable. If both are
-        # missing the row is effectively orphaned — `load()` will warn.
-        session_id = d.get("session_id") or d.get("source_session_id")
+        session_id = d.get("session_id") or d.get("source_session_id") or ""
+        filename = d.get("filename", "")
+        mime = d.get("mime") or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         return cls(
             id=d.get("output_id") or d["id"],
             kind=d.get("kind", "standalone"),
-            title=d.get("title", ""),
-            filename=d.get("filename", ""),
-            mime=d.get("mime", "application/octet-stream"),
+            filename=filename,
             size_bytes=int(d.get("size_bytes", 0)),
             session_id=session_id,
-            source_session_id=d.get("source_session_id"),
-            source_kb_ids=list(d.get("source_kb_ids") or []),
+            source_id=d.get("source_id"),
             created_at=float(d.get("created_at", _now())),
+            title=d.get("title") or filename,
+            mime=mime,
+            source_session_id=d.get("source_session_id") or session_id or None,
+            source_kb_ids=list(d.get("source_kb_ids") or []),
         )
 
 
 class OutputsRegistry:
     """Single JSON file at `root/registry.json`.
 
-    Files at `root/<session_id>/<output_id>/<filename>` (Phase C 2026-05-31).
+    Files at `root/<session_id>/<filename>` (Phase A 2026-06-01). Sidecar at
+    `root/<session_id>/.<output_id>.meta.json`.
     """
 
     def __init__(self, root: Path) -> None:
         self.root = root
+        self._root = root
         self.path = root / "registry.json"
         self._lock = asyncio.Lock()
         self._items: dict[str, OutputMeta] = {}
@@ -118,27 +123,20 @@ class OutputsRegistry:
                 raw = json.loads(self.path.read_text("utf-8"))
                 for item in raw.get("outputs", []):
                     meta = OutputMeta.from_dict(item)
-                    if meta.session_id is None:
+                    target = self._root / meta.session_id / meta.filename
+                    if not target.exists():
+                        # Legacy layout `<root>/<sid>/<output_id>/<filename>`
+                        # is not migrated — user resets local data.
                         logger.warning(
-                            "legacy outputs row %s has no session_id; keeping but unindexed by session",
+                            "outputs row %s points at missing file %s; skipping",
                             meta.id,
+                            target,
                         )
+                        continue
                     self._items[meta.id] = meta
             except (json.JSONDecodeError, OSError):
                 # Corrupt registry — start clean rather than refusing to boot.
                 self._items.clear()
-        # Detect legacy flat-layout dirs (pre-Phase-C) and warn. Do NOT
-        # migrate or delete — that's an operator decision.
-        if self.root.exists():
-            try:
-                for entry in self.root.iterdir():
-                    if entry.is_dir() and _OUTPUT_ID_RE.match(entry.name):
-                        logger.warning(
-                            "legacy flat outputs dir %s; not indexed (Phase C migration required)",
-                            entry,
-                        )
-            except OSError:
-                pass
         self._loaded = True
 
     async def _flush_locked(self) -> None:
@@ -149,28 +147,19 @@ class OutputsRegistry:
         tmp.replace(self.path)
 
     def path_for(self, meta: OutputMeta) -> Path:
-        """`<root>/<session_id>/<output_id>/<filename>`.
-
-        Falls back to `<root>/<output_id>/<filename>` for legacy rows with no
-        `session_id` so existing references don't crash; new code should
-        always set `session_id`.
-        """
-        if meta.session_id is None:
-            return self.root / meta.id / meta.filename
-        return self.root / meta.session_id / meta.id / meta.filename
+        """`<root>/<session_id>/<filename>` (no `<output_id>` middle layer)."""
+        return self._root / meta.session_id / meta.filename
 
     def output_dir(self, meta: OutputMeta) -> Path:
-        """`<root>/<session_id>/<output_id>/`. Same legacy fallback as `path_for`."""
-        if meta.session_id is None:
-            return self.root / meta.id
-        return self.root / meta.session_id / meta.id
+        """`<root>/<session_id>/`. The session-level dir, shared across outputs."""
+        return self._root / meta.session_id
 
     async def list(self, *, session_id: str | None = None) -> list[OutputMeta]:
         async with self._lock:
             await self.load()
             items = list(self._items.values())
         if session_id is not None:
-            items = [m for m in items if m.source_session_id == session_id]
+            items = [m for m in items if m.session_id == session_id]
         items.sort(key=lambda m: m.created_at, reverse=True)
         return items
 
@@ -183,87 +172,41 @@ class OutputsRegistry:
         self,
         *,
         session_id: str,
-        src_path: Path,
-        title: str,
+        file_path: Path,
         filename: str,
-        mime: str,
-        source_session_id: str | None = None,
-        source_kb_ids: list[str] | None = None,
+        kind: str,
+        source_id: str | None = None,
     ) -> OutputMeta:
-        """Register an already-written file: move it under `outputs/<sid>/<id>/<filename>`.
+        """Adopt a written file under `outputs/<session_id>/<filename>`.
 
-        If `src_path` already lives at the canonical target path, no move
-        happens and we just stamp the sidecar `meta.json`.
-
-        `source_session_id` defaults to `session_id` when not provided — the
-        common case (file was created in this session). Pass an explicit
-        value only for fork/import scenarios.
+        If `file_path` is already at the canonical target, no copy happens —
+        we just stamp the sidecar. Otherwise the source bytes are copied
+        (preserving timestamps) into place.
         """
         async with self._lock:
             await self.load()
+            outputs_session_dir = self._root / session_id
+            outputs_session_dir.mkdir(parents=True, exist_ok=True)
+            target_path = outputs_session_dir / filename
+            src = Path(file_path)
+            if src.resolve() != target_path.resolve():
+                shutil.copy2(str(src), str(target_path))
+            size = target_path.stat().st_size if target_path.exists() else 0
             output_id = _new_id()
-            target_dir = self.root / session_id / output_id
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = target_dir / filename
-            size = src_path.stat().st_size if src_path.exists() else 0
-            if src_path.resolve() != target_path.resolve():
-                shutil.move(str(src_path), str(target_path))
+            mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
             meta = OutputMeta(
                 id=output_id,
-                kind="standalone",
-                title=title,
+                kind=kind,
                 filename=filename,
-                mime=mime,
                 size_bytes=size,
                 session_id=session_id,
-                source_session_id=source_session_id or session_id,
-                source_kb_ids=list(source_kb_ids or []),
-            )
-            (target_dir / "meta.json").write_text(
-                json.dumps(meta.to_dict(), indent=2), encoding="utf-8"
-            )
-            self._items[output_id] = meta
-            await self._flush_locked()
-            return meta
-
-    async def adopt_at(
-        self,
-        *,
-        output_id: str,
-        session_id: str,
-        title: str,
-        filename: str,
-        mime: str,
-        source_session_id: str | None = None,
-        source_kb_ids: list[str] | None = None,
-    ) -> OutputMeta | None:
-        """Adopt an existing `outputs/<session_id>/<output_id>/<filename>` path.
-
-        Used when the model wrote directly into the harness-resolved path
-        using an id we minted upstream. Returns None if the file is missing;
-        if the id is already registered, returns the existing row unchanged.
-        """
-        target_dir = self.root / session_id / output_id
-        target_path = target_dir / filename
-        if not target_path.exists():
-            return None
-        async with self._lock:
-            await self.load()
-            if output_id in self._items:
-                return self._items[output_id]
-            size = target_path.stat().st_size
-            meta = OutputMeta(
-                id=output_id,
-                kind="standalone",
-                title=title,
-                filename=filename,
+                source_id=source_id,
+                title=filename,
                 mime=mime,
-                size_bytes=size,
-                session_id=session_id,
-                source_session_id=source_session_id or session_id,
-                source_kb_ids=list(source_kb_ids or []),
+                source_session_id=session_id,
             )
-            (target_dir / "meta.json").write_text(
+            sidecar = outputs_session_dir / f".{output_id}.meta.json"
+            sidecar.write_text(
                 json.dumps(meta.to_dict(), indent=2), encoding="utf-8"
             )
             self._items[output_id] = meta
@@ -277,17 +220,22 @@ class OutputsRegistry:
             if meta is None:
                 return False
             await self._flush_locked()
-        target_dir = self.output_dir(meta)
-        if target_dir.exists():
-            await asyncio.to_thread(shutil.rmtree, str(target_dir), True)
+        outputs_session_dir = self._root / meta.session_id
+        data_path = outputs_session_dir / meta.filename
+        sidecar = outputs_session_dir / f".{output_id}.meta.json"
+        for p in (data_path, sidecar):
+            try:
+                if p.exists():
+                    await asyncio.to_thread(p.unlink)
+            except OSError:
+                pass
         return True
 
     async def delete_session_outputs(self, session_id: str) -> None:
-        """Bulk-remove every output owned by `session_id` (Phase C cleanup hook).
+        """Bulk-remove every output owned by `session_id`.
 
-        Wipes the on-disk session subtree (`<root>/<session_id>/`) and drops
-        all matching registry rows. Best-effort — never raises; missing
-        directories are not an error.
+        Wipes `<root>/<session_id>/` and drops all matching registry rows.
+        Best-effort — never raises; missing directories are not an error.
         """
         async with self._lock:
             await self.load()
@@ -300,6 +248,6 @@ class OutputsRegistry:
                 self._items.pop(oid, None)
             if removed_ids:
                 await self._flush_locked()
-        session_dir = self.root / session_id
+        session_dir = self._root / session_id
         if session_dir.exists():
             await asyncio.to_thread(shutil.rmtree, str(session_dir), True)
