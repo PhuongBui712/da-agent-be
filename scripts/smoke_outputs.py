@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Live smoke test for the session-scoped outputs pipeline (Phase C 2026-05-31).
+
+Asks the agent to create a tiny .xlsx via the running BE, then verifies:
+  * an `output.created` SSE event arrives with a session-scoped download_url
+  * the file is on disk under `~/.da-agent/outputs/<sid>/<out_id>/...`
+  * assistant text contains NO absolute path leak (path-scrubbing works)
+  * `DELETE /sessions/<sid>` wipes the per-session outputs subtree
+
+Opt-in. CI does NOT run this. Run manually after starting the BE locally:
+
+    # Terminal 1: boot the backend
+    uv run uvicorn da_agent.server.app:create_app --factory --port 8765
+
+    # Terminal 2: run the smoke
+    DA_AGENT_SMOKE_URL=http://127.0.0.1:8765 \\
+    ANTHROPIC_API_KEY=sk-... \\
+    uv run python scripts/smoke_outputs.py
+
+Exits 0 on PASS, 0 with skip message if no API key, 1 on FAIL.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+import httpx
+
+# --------------------------------------------------------------------------- #
+# Config + helpers
+# --------------------------------------------------------------------------- #
+URL = os.environ.get("DA_AGENT_SMOKE_URL", "http://127.0.0.1:8765").rstrip("/")
+DATA_HOME = Path(os.environ.get("DA_AGENT_HOME", str(Path.home() / ".da-agent")))
+OUTPUTS_ROOT = DATA_HOME / "outputs"
+
+DOWNLOAD_URL_RE = re.compile(r"^/outputs/out_[0-9a-f]{16}$")
+# Any absolute path-looking segment ending in a known output extension.
+LEAK_RE = re.compile(r"/(?:data|home|tmp|var)/[\w/.-]+\.(?:xlsx|pptx|docx|csv)")
+
+PROMPT = (
+    "Create a tiny .xlsx with one row of data: column A 'Hello', column B 'World'. "
+    "Then mention only the filename in your reply — never paste an absolute path."
+)
+
+
+class CheckResult:
+    """Tiny PASS/FAIL recorder; final summary reads `failures`."""
+
+    def __init__(self) -> None:
+        self.failures: list[str] = []
+
+    def check(self, label: str, ok: bool, detail: str = "") -> None:
+        suffix = f" — {detail}" if detail else ""
+        if ok:
+            print(f"  PASS  {label}{suffix}")
+        else:
+            print(f"  FAIL  {label}{suffix}")
+            self.failures.append(label)
+
+
+def _have_api_key() -> bool:
+    return bool(
+        os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("DATABRICKS_TOKEN")
+        or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    )
+
+
+def _parse_sse_chunk(buf: str) -> tuple[str, dict] | None:
+    """Parse one SSE block (event/data lines, terminated by blank line).
+
+    Returns (event_type, payload) or None if no JSON parse is possible.
+    """
+    event_type = "message"
+    data_lines: list[str] = []
+    for line in buf.splitlines():
+        if line.startswith("event:"):
+            event_type = line[len("event:") :].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[len("data:") :].lstrip())
+    if not data_lines:
+        return None
+    try:
+        return event_type, json.loads("\n".join(data_lines))
+    except json.JSONDecodeError:
+        return None
+
+
+def _stream_turn(client: httpx.Client, sid: str, prompt: str) -> list[tuple[str, dict]]:
+    """POST /sessions/<sid>/messages and collect every parsed SSE event.
+
+    Times out generously (4 minutes) — model writes can take a while. The
+    server closes the stream when the turn ends, which is our exit signal.
+    """
+    events: list[tuple[str, dict]] = []
+    with client.stream(
+        "POST",
+        f"{URL}/sessions/{sid}/messages",
+        json={"prompt": prompt},
+        timeout=httpx.Timeout(connect=10.0, read=240.0, write=10.0, pool=10.0),
+    ) as resp:
+        if resp.status_code != 200:
+            raise RuntimeError(f"messages POST returned {resp.status_code}: {resp.text}")
+        chunk: list[str] = []
+        for raw in resp.iter_lines():
+            line = raw.rstrip("\r")
+            if line == "":
+                if chunk:
+                    parsed = _parse_sse_chunk("\n".join(chunk))
+                    if parsed is not None:
+                        events.append(parsed)
+                chunk = []
+            else:
+                chunk.append(line)
+        if chunk:
+            parsed = _parse_sse_chunk("\n".join(chunk))
+            if parsed is not None:
+                events.append(parsed)
+    return events
+
+
+# --------------------------------------------------------------------------- #
+# Main
+# --------------------------------------------------------------------------- #
+def main() -> int:
+    if not _have_api_key():
+        print(
+            "[skip] no API key in env (ANTHROPIC_API_KEY / DATABRICKS_TOKEN / "
+            "CLAUDE_CODE_OAUTH_TOKEN). Smoke is opt-in; exiting 0."
+        )
+        return 0
+
+    print(f"[smoke] BE URL = {URL}")
+    print(f"[smoke] data home = {DATA_HOME}")
+    res = CheckResult()
+
+    with httpx.Client(timeout=30.0) as client:
+        # --- 1. Create session ----------------------------------------------
+        r = client.post(f"{URL}/sessions", json={"name": "smoke-outputs"})
+        if r.status_code != 201:
+            print(f"=== FAIL: POST /sessions -> {r.status_code} {r.text} ===")
+            return 1
+        sid = r.json()["id"]
+        print(f"[smoke] session id = {sid}")
+
+        # --- 2. Send prompt and collect SSE ---------------------------------
+        t0 = time.monotonic()
+        try:
+            events = _stream_turn(client, sid, PROMPT)
+        except Exception as exc:  # noqa: BLE001 — surface any error verbatim
+            print(f"=== FAIL: SSE stream error: {exc} ===")
+            _try_delete(client, sid)
+            return 1
+        elapsed = time.monotonic() - t0
+        print(f"[smoke] turn done in {elapsed:.1f}s — {len(events)} events")
+
+        # --- 3. Aggregate --------------------------------------------------
+        output_events = [(t, p) for t, p in events if t == "output.created"]
+        text_chunks = [
+            p.get("text", "")
+            for (t, p) in events
+            if t in {"assistant.text", "assistant.text.delta"}
+        ]
+        full_text = "".join(text_chunks)
+
+        # 3a. output.created arrived
+        res.check(
+            "output.created event arrived",
+            len(output_events) >= 1,
+            f"got {len(output_events)} event(s)",
+        )
+        if not output_events:
+            print(f"=== FAIL: no output.created event (sid={sid}) ===")
+            _try_delete(client, sid)
+            return 1
+
+        _, payload = output_events[0]
+        output_id = payload.get("output_id", "")
+        download_url = payload.get("download_url", "")
+        res.check(
+            "download_url shape",
+            bool(DOWNLOAD_URL_RE.match(download_url)),
+            f"got '{download_url}'",
+        )
+
+        # 3b. HEAD download_url returns 200
+        head = client.head(f"{URL}{download_url}")
+        res.check(
+            "HEAD download_url returns 200",
+            head.status_code == 200,
+            f"status={head.status_code}",
+        )
+
+        # 3c. On-disk file exists under outputs/<sid>/<out_id>/
+        sid_dir = OUTPUTS_ROOT / sid
+        out_dir = sid_dir / output_id
+        files = list(out_dir.glob("*.xlsx")) if out_dir.exists() else []
+        res.check(
+            "on-disk file exists under outputs/<sid>/<out_id>/",
+            len(files) >= 1,
+            f"dir={out_dir} files={[f.name for f in files]}",
+        )
+
+        # 3d. No absolute-path leak in assistant.text
+        leaks = LEAK_RE.findall(full_text)
+        res.check(
+            "no absolute path leak in assistant.text",
+            not leaks,
+            f"leaks={leaks[:3]}" if leaks else "",
+        )
+
+        # --- 4. DELETE session and verify cleanup ---------------------------
+        d = client.delete(f"{URL}/sessions/{sid}")
+        res.check(
+            "DELETE /sessions/<sid> returns 204",
+            d.status_code == 204,
+            f"status={d.status_code}",
+        )
+
+        # Give the registry a tick (delete_session_outputs is awaited
+        # in the route, so by the time the response returns it's done — but
+        # rmtree is filesystem-level and can race in odd environments).
+        time.sleep(0.2)
+
+        res.check(
+            "outputs/<sid>/ removed after delete",
+            not sid_dir.exists(),
+            f"dir={sid_dir}",
+        )
+
+    # --- Summary -----------------------------------------------------------
+    if not res.failures:
+        print("\n=== PASS ===")
+        return 0
+    print(f"\n=== FAIL: {len(res.failures)} check(s): {res.failures} ===")
+    return 1
+
+
+def _try_delete(client: httpx.Client, sid: str) -> None:
+    """Best-effort session cleanup on early failure paths."""
+    try:
+        client.delete(f"{URL}/sessions/{sid}")
+    except Exception:
+        pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())
