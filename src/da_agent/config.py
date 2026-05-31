@@ -114,6 +114,16 @@ class Settings:
         """Spec §4 / §8.2 — registered standalone outputs."""
         return self.data_root / "outputs"
 
+    def outputs_session_dir(self, session_id: str) -> Path:
+        """Per-session outputs root: `<outputs_dir>/<session_id>/`.
+
+        Created lazily on first write — `ensure_dirs()` does NOT mkdir per-session.
+        Layout: `outputs/<session_id>/<output_id>/<filename>` (Phase C 2026-05-31:
+        all outputs — standalone, KB-bound, attachment-bound — land here so
+        `DELETE /sessions/<sid>` can wipe with a single rmtree).
+        """
+        return self.outputs_dir / session_id
+
     @property
     def attachments_dir(self) -> Path:
         """Spec §4 / §5.3 — short-term per-session attachments."""
