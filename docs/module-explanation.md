@@ -24,7 +24,7 @@ flowchart LR
         Runner["AgentRunner<br/>(send + render dispatch)"]
         Perms["make_can_use_tool<br/>(ExitPlan / AskQuestion gate)"]
         Todos["TodoStore<br/>(Task* / TodoWrite normalizer)"]
-        Subagents["build_subagents()<br/>profiler / analyst / visualizer"]
+        Subagents["build_subagents()<br/>analyst / reporter (kb_profiler is ingestion-only — see §6)"]
         Prompts["build_system_prompt()"]
     end
 
@@ -132,13 +132,13 @@ flowchart LR
 - **Vai trò**: Tạo system prompt cho agent. Trả về dict `{"type": "preset", "preset": "claude_code", "append": <text>}` để layer custom instructions trên `claude_code` preset (SDK docs: *Modifying system prompts → Append to the `claude_code` preset*). Append text được structure bằng XML tags (`<role>`, `<environment>`, `<workflow>`, `<output_rules>`, `<trigger_rules>`, `<examples>`, `<output_discipline>`) theo Claude prompting best-practices — direct/imperative voice cho rules, worked examples cho fence cả 2 phía.
 - **Public API**: `build_system_prompt(settings: Settings) -> dict`.
 - **Tương tác**: chỉ được gọi bởi `AgentRunner._build_options()`.
-- **Layout filesystem được mô tả trong append**: `kb_dir/<kb_id>/{manifest.json, raw.xlsx, versions/v_curr.xlsx, versions/v_prev.xlsx}` cho KB, `attachments_dir/<sid>/<att_id>/{<filename>, versions/v_curr.<ext>, versions/v_prev.<ext>}` cho attachment. Không có "workspace" — đã deprecate (spec §8.2).
+- **Layout in append**: `kb_dir/<kb_id>/{raw.xlsx, versions/v_curr.<ext>, versions/v_prev.<ext>}` cho KB; memory notes tại `kb_profiler_memory_dir/<kb_id>.md` (ngoài `kb_dir`). `manifest.json` không còn được active pipeline ghi. `attachments_dir/<sid>/<att_id>/{<filename>, versions/v_curr.<ext>, versions/v_prev.<ext>}` cho attachment. Không có "workspace" — đã deprecate (spec §8.2).
 
 ### 3.3 `agent/subagents.py`
 
-- **Vai trò**: Định nghĩa 3 subagent specialization (`profiler`, `analyst`, `visualizer`) — main agent dispatch qua tool `Task`.
+- **Vai trò**: Định nghĩa 2 subagent specialization (`analyst`, `reporter`) — main agent dispatch qua tool `Task`. Riêng `kb_profiler` nằm ở `ingestion/profiler.py`, **KHÔNG** nằm trong `build_subagents()` (ingestion-only, không dispatch per-turn).
 - **Public API**: `build_subagents() -> dict[str, AgentDefinition]`.
-- **Permissions**: `profiler` + `analyst` chỉ có read-only tools (Read/Bash/Glob/Grep + xlsx skill); `visualizer` thêm Write/Edit.
+- **Permissions**: `analyst` chỉ có read-only tools + xlsx skill; `reporter` có Write/Edit + xlsx/pptx/docx skills.
 
 ### 3.4 `agent/permissions.py` — `make_can_use_tool`
 
@@ -319,9 +319,9 @@ sequenceDiagram
 
 ### 5.1 `outputs/observer.py` — `OutputsObserver`
 
-- **Vai trò**: Passive observer, observe Write/Edit/Bash tool calls để detect output files. Phân loại thành:
-  - `standalone` — path nằm dưới `outputs_dir/<output_id>/`.
-  - `kb_version` — path khớp pattern `kb_dir/<kb_id>/versions/v<N>.xlsx`.
+- **Vai trò**: Passive observer, observe Write/Edit/Bash tool calls để detect output files. Phase C session-scoped layout: chỉ accept paths dưới `outputs/<session_id>/<output_id>/<filename>`. Phân loại thành:
+  - `standalone` — applies cho cả 5 targets (`New .xlsx`, `New .pptx`, `New .docx`, `New sheet`, `Pick sheet`); kind metadata trong registry vẫn track `kb_version` / `attachment_version` cho UI grouping nhưng path luôn là session-scoped.
+  - Legacy branches (`kb_dir/<kb_id>/versions/v<N>.xlsx`, `attachments/<sid>/<att_id>/versions/`) deprecated — `_classify` return None.
   - Ambiguous: bỏ qua.
 - **Public API**:
   - `OutputDetection(kind, file_path, output_id?, filename?, kb_id?, version?)` — dataclass.
@@ -359,51 +359,43 @@ flowchart TD
 
 ### 5.2 `outputs/registry.py` — `OutputsRegistry`
 
-- **Vai trò**: Persistent registry cho standalone outputs (`outputs/registry.json` + per-output dir + `meta.json` sidecar). Mirror pattern từ `KbRegistry`.
+- **Vai trò**: Persistent registry cho standalone outputs. Phase C layout (2026-05-31): `outputs/<session_id>/<output_id>/<filename>` + per-output `meta.json` sidecar. `registry.json` ở top-level `outputs_dir`; per-session dir tạo lazy lúc register.
 - **Public API**:
   - `OutputMeta(id, kind, title, filename, mime, size_bytes, source_session_id, source_kb_ids, created_at)`.
-  - `OutputsRegistry(root)`: `load()`, `list(*, session_id?)`, `get(output_id)`, `register_standalone(...)`, `adopt_at(*, output_id, ...)`, `delete(output_id)`.
+  - `OutputsRegistry(root)`: `load()`, `list(*, session_id?)`, `get(output_id)`, `register_standalone(..., session_id)`, `adopt_at(*, output_id, ...)`, `delete(output_id)`, `delete_session_outputs(session_id)`.
+  - `register_standalone(..., session_id)` — yêu cầu `session_id`; file land tại `outputs/<session_id>/<output_id>/<filename>`.
+  - `delete_session_outputs(session_id)` — recursively remove `outputs/<session_id>/` + bulk-remove registry rows match `session_id`.
 - **Điểm tinh tế**:
   - Atomic write: flush dùng `.tmp` rồi `os.replace`.
   - `_lock = asyncio.Lock()` — mọi mutation serialize.
-  - `adopt_at()` dùng khi model write trực tiếp vào path `outputs_dir/out_<id>/file` mà server chưa mint id đó — idempotent: id đã tồn tại thì trả existing row.
+  - `adopt_at()` dùng khi model write trực tiếp vào path `outputs_dir/<session_id>/out_<id>/<filename>` mà server chưa mint id đó — idempotent: id đã tồn tại thì trả existing row.
 
 ---
 
-## 6. `kb/` — Knowledge Base pipeline
+## 6. `kb/` + `ingestion/` — Knowledge Base pipeline
 
-### 6.1 `kb/registry.py` — `KbRegistry`
+Active pipeline: `ingestion/` (memory-driven, `kb_profiler` opus subagent). Legacy/inactive: `kb/preprocess.py` + `kb/runner.py` + `kb/manifest.py` — vẫn on disk nhưng **KHÔNG** được server import. `server/routes/kb.py` imports from `...ingestion` only.
 
-- **Vai trò**: Quản lý `kb/registry.json` + state machine `PENDING → PROCESSING → READY|FAILED`.
-- **Crash recovery (rất quan trọng)**: `load()` quét bất kỳ row nào status `PROCESSING` và rewrite thành `FAILED, error="interrupted by restart"` rồi persist ngay. FE/user phải re-upload.
+### 6.1 `ingestion/registry.py` — `KbRegistry`
+
+- **Vai trò**: Quản lý `kb/registry.json` + state machine `PENDING → PROFILING → READY | READY_PARTIAL | FAILED`.
+- **Concurrency cap**: `_PROFILE_LOCK = Semaphore(1)` — at most one profiler runs at a time across the host.
+- **Crash recovery (rất quan trọng)**: `load()` quét bất kỳ row nào status `PROFILING` và rewrite thành `FAILED, error="interrupted by restart"` rồi persist ngay. Legacy `PROCESSING` rows từ registries cũ cũng reset to `FAILED` cho forward-compat. FE/user phải re-upload hoặc reprofile.
 - **API**: `load`, `list`, `get`, `create`, `delete`, `update_status`. `update_status(... "FAILED", error=msg)` chỉ set `meta.error` khi status là FAILED; transition khác clear error về None.
 
-### 6.2 `kb/manifest.py`
+### 6.2 `ingestion/profiler.py` — `kb_profiler` subagent definition
 
-- **Vai trò**: Schema dataclass + atomic IO cho `manifest.json`.
-- **Dataclasses**: `Column`, `Region`, `SheetSummary`, `Relationship`, `Manifest`.
-- **Functions**: `write_manifest_atomic(path, manifest)` (`.tmp` + `os.replace`), `read_manifest(path) -> dict` (plain dict, vì HTTP handler chỉ cần passthrough JSON).
-- **Quirk**: `Relationship.from_` (Python keyword conflict workaround) ↔ JSON key `"from"`; `to_dict()` rename để giữ wire format chuẩn.
+- **Vai trò**: Định nghĩa `kb_profiler` opus subagent — ingestion-only, **KHÔNG** nằm trong `build_subagents()` (không dispatch per-turn).
+- **Output**: Free-form **markdown memory note** ghi tại `kb_profiler_memory_dir/<kb_id>.md` (default `~/.da-agent/agent-memory/kb_profiler/`).
+- **Model**: opus-class (default `DA_AGENT_KB_PROFILER_MODEL`).
+- **Permissions**: read-only tools (Read/Bash/Glob/Grep + xlsx skill); explicitly NOT allowed to write outside the memory dir.
 
-### 6.3 `kb/preprocess.py`
+### 6.3 `ingestion/runner.py` — orchestrator
 
-- **Vai trò**: Sync blocking pipeline chạy trong executor thread — đọc `.xlsx`, profile từng sheet thành `Manifest`.
-- **Entry point**: `build_manifest(raw_path, kb_id) -> Manifest`.
-- **Stages**:
-  1. `load_workbook(read_only=True, data_only=True)`.
-  2. `_materialize_sheet` — propagate merged cells (top-left fills phần còn lại).
-  3. `_detect_regions` — cluster non-blank cells, split tại fully-blank rows/columns.
-  4. `_infer_header_row` — row đầu tiên trong 5 rows đầu có ≥60% string cells và không có numeric cell; fallback row 0 với `low_confidence=True`.
-  5. `_collapse_multirow_headers` — join multi-row header bằng `_`.
-  6. `_profile_column` — dtype, cardinality (cap `PROFILE_ROW_CAP=50000`), min/max, sample values.
-  7. `_infer_relationships` — cross-sheet FK heuristic: `sample_values` overlap ≥ `FK_MIN_CONFIDENCE=0.8`; annotate `col.role = "fk?->Sheet.col"`.
-- **Tunables (monkey-patchable trong tests)**: `PROFILE_ROW_CAP`, `SAMPLE_ROW_LIMIT`, `SAMPLE_VALUE_LIMIT`, `MIN_REGION_AREA`, `FK_MIN_CONFIDENCE`, `HEADER_STRING_RATIO`.
-
-### 6.4 `kb/runner.py`
-
-- **Vai trò**: Async orchestrator — bridge asyncio ↔ blocking pipeline; flip registry status; absorb exception thành FAILED (không re-raise).
+- **Vai trò**: Async orchestrator cho per-file profiling. Status transitions, error handling, write memory note path.
 - **API**: `run_pipeline(*, registry, kb_root, kb_id) -> None` — fire-and-forget task.
-- **Điểm tinh tế**: Exception bị catch-all và ghi vào registry. Lifecycle owned bởi `AppState._kb_tasks` — `shutdown()` cancel chúng.
+- **Status flow**: `PENDING → acquire(_PROFILE_LOCK) → PROFILING → kb_profiler subagent runs → READY | READY_PARTIAL | FAILED`.
+- **Error handling**: Exception bị catch-all và ghi vào registry. Per-sheet failures land trên `READY_PARTIAL`. Lifecycle owned bởi `AppState._kb_tasks` — `shutdown()` cancel chúng.
 
 ### 6.5 KB ingestion sequence
 
@@ -415,7 +407,7 @@ sequenceDiagram
     participant Reg as KbRegistry
     participant FS as Filesystem
     participant Pipe as run_pipeline (background)
-    participant PP as preprocess.build_manifest
+    participant PP as kb_profiler (opus subagent)
 
     FE->>Route: POST /kb/files (multipart)
     Route->>Route: _sanitize_filename + validate ext
@@ -426,18 +418,48 @@ sequenceDiagram
     Route->>Pipe: asyncio.create_task(run_pipeline)
     Route->>FE: 202 KbFileResponse(status=PENDING)
 
-    Pipe->>Reg: update_status(kb_id, PROCESSING)
-    Pipe->>PP: asyncio.to_thread(build_manifest)
-    PP-->>Pipe: Manifest
-    Pipe->>FS: write_manifest_atomic(manifest_path, manifest)
+    Pipe->>Reg: update_status(kb_id, PROFILING)
+    Pipe->>PP: kb_profiler subagent runs, writes <kb_id>.md memory note
     alt success
         Pipe->>Reg: update_status(kb_id, READY)
+    else partial
+        Pipe->>Reg: update_status(kb_id, READY_PARTIAL)
     else exception
         Pipe->>Reg: update_status(kb_id, FAILED, error)
     end
 
-    Note over FE,Reg: FE poll GET /kb/files/{kb_id} đến khi status = READY hoặc FAILED
+    Note over FE,Reg: FE poll GET /kb/files/{kb_id} đến khi status = READY, READY_PARTIAL, hoặc FAILED
 ```
+
+### 6.6 Legacy (inactive — kept for backcompat, NOT imported)
+
+The following modules remain on disk but the active server does not import them. `server/routes/kb.py` imports from `...ingestion` only.
+
+#### `kb/registry.py` (legacy)
+
+Older deterministic-pipeline registry. Superseded by `ingestion/registry.py`.
+
+#### `kb/manifest.py` (legacy)
+
+- Schema dataclass + atomic IO cho `manifest.json`.
+- **Dataclasses**: `Column`, `Region`, `SheetSummary`, `Relationship`, `Manifest`.
+- **Functions**: `write_manifest_atomic(path, manifest)` (`.tmp` + `os.replace`), `read_manifest(path) -> dict`.
+- **Quirk**: `Relationship.from_` ↔ JSON key `"from"`; `to_dict()` rename để giữ wire format chuẩn.
+- **Status**: NOT written by the active pipeline. `manifest.json` is deprecated; the active artifact is the markdown memory note at `kb_profiler_memory_dir/<kb_id>.md`.
+
+#### `kb/preprocess.py` (legacy)
+
+- Sync blocking pipeline chạy trong executor thread — đọc `.xlsx`, profile từng sheet thành `Manifest`.
+- **Entry point**: `build_manifest(raw_path, kb_id) -> Manifest`.
+- **Stages**: `load_workbook` → `_materialize_sheet` → `_detect_regions` → `_infer_header_row` → `_collapse_multirow_headers` → `_profile_column` → `_infer_relationships`.
+- **Tunables (monkey-patchable trong tests)**: `PROFILE_ROW_CAP`, `SAMPLE_ROW_LIMIT`, `SAMPLE_VALUE_LIMIT`, `MIN_REGION_AREA`, `FK_MIN_CONFIDENCE`, `HEADER_STRING_RATIO`.
+- **Status**: NOT invoked by the active pipeline.
+
+#### `kb/runner.py` (legacy)
+
+- Async orchestrator cho legacy deterministic pipeline.
+- **API**: `run_pipeline(*, registry, kb_root, kb_id) -> None`.
+- **Status**: NOT scheduled by the active server. Active runner is `ingestion/runner.py`.
 
 ---
 
@@ -447,7 +469,7 @@ sequenceDiagram
 
 - **Vai trò**: Tạo `FastAPI`, mount routers, setup CORS, điều phối lifespan.
 - **Public API**: `create_app(settings: Settings | None) -> FastAPI`.
-- **Lifespan**: trên enter — set `os.environ["CLAUDE_CONFIG_DIR"] = str(settings.sessions_dir)` (lưu giá trị cũ để restore) rồi `AppState(settings)` → `await registry.load()` → `await kb.load()` (sweep PROCESSING → FAILED) → `await outputs.load()` → gắn vào `app.state.app_state`. On shutdown: `await state.shutdown()` cancel KB tasks + discard runtimes; sau đó restore `CLAUDE_CONFIG_DIR` về giá trị cũ (hoặc `pop` nếu trước đó không có).
+- **Lifespan**: trên enter — set `os.environ["CLAUDE_CONFIG_DIR"] = str(settings.sessions_dir)` (lưu giá trị cũ để restore) rồi `AppState(settings)` → `await registry.load()` → `await kb.load()` (sweep `PROFILING → FAILED`; legacy `PROCESSING` rows cũng reset to `FAILED` for forward-compat) → `await outputs.load()` → gắn vào `app.state.app_state`. On shutdown: `await state.shutdown()` cancel KB tasks + discard runtimes; sau đó restore `CLAUDE_CONFIG_DIR` về giá trị cũ (hoặc `pop` nếu trước đó không có).
 - **Lý do mirror env**: `claude_agent_sdk.get_session_messages` (dùng cho history replay) chạy trong parent FastAPI process và đọc `CLAUDE_CONFIG_DIR` từ `os.environ` — nếu không mirror, nó sẽ tìm trong `~/.claude/projects/` thay vì `settings.sessions_dir/projects/` nơi SDK subprocess thực sự ghi JSONL.
 - **CORS**: `http://127.0.0.1:3000` + `http://localhost:3000`, methods/headers `*`, `allow_credentials=False`.
 - **Routers**: `sessions`, `messages`, `interactions`, `attachments` (cùng prefix `/sessions`); `kb`, `outputs`. Inline `GET /health`.
@@ -654,6 +676,7 @@ sequenceDiagram
 | `todos.snapshot` | `on_todos` | full snapshot, không phải delta |
 | `wait.begin` / `wait.end` | `begin_wait`/`end_wait` | wait label |
 | `interaction.requested` | `ask_question`/`approve_plan` | parked future, FE renders modal |
+| `interaction.resolved` | emitted sau khi `/respond` xử lý xong | FE pop `pendingInteractions[tool_use_id]` để đóng modal |
 | `output.created` | `on_output` (server bridge từ observer) | mới detect output file |
 
 ---
@@ -668,7 +691,7 @@ flowchart LR
     LoadSess --> CorruptSess{JSON corrupt?}
     CorruptSess -- yes --> ResetSess[clear _items<br/>boot sạch]
     CorruptSess -- no --> OkSess[ready]
-    LoadKB --> Sweep["scan rows status PROCESSING"]
+    LoadKB --> Sweep["scan rows status PROFILING (also legacy PROCESSING)"]
     Sweep --> Rewrite["rewrite → FAILED<br/>error = interrupted by restart"]
     Rewrite --> PersistKB[atomic flush registry.json]
     LoadOut --> OkOut[ready]
@@ -677,7 +700,7 @@ flowchart LR
     OkOut --> Ready
 ```
 
-- KB pipeline đang dở khi server down → row đó bắt buộc phải FAILED sau khi reload — frontend không bao giờ thấy KB "stuck" trong PROCESSING vô thời hạn.
+- KB pipeline đang dở khi server down → row đó bắt buộc phải FAILED sau khi reload — frontend không bao giờ thấy KB "stuck" trong PROFILING (hoặc legacy PROCESSING) vô thời hạn.
 - Atomic-rename pattern `.tmp` + `os.replace` được dùng đồng nhất ở 4 nơi: `SessionRegistry`, `KbRegistry`, `AttachmentsRegistry`, `OutputsRegistry`, và `write_manifest_atomic`.
 
 ---

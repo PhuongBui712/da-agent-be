@@ -115,7 +115,7 @@ Quản lý long-term KB files. Table view với polling status [§5.1, §8.5]. C
 
 ### 4.3 Outputs screen (`/outputs`)
 
-List tất cả standalone outputs (`kind=standalone`) — không bao gồm `kb_version` (xem qua KB detail) [§8.2, §11]. Filter theo session. Xem §12.
+List standalone outputs cho current session (`kind=standalone`) — không bao gồm `kb_version` (xem qua KB detail) [§8.2, §11]. Filter theo `sessionId` mặc định; "All sessions" toggle có thể bật để xem cross-session outputs. Xem §12.
 
 ### 4.4 Settings (`/settings`) — Future work
 
@@ -172,7 +172,7 @@ Left sidebar persistent qua mọi screen. Nội dung từ trên xuống:
    - Hover: hiện kebab menu (3-dot) → menu items: Rename / Fork / Delete.
      - Rename → inline editable text trong item.
      - Fork → `POST /sessions/{id}/fork` [§11] → redirect tới session mới (không copy attachments [§5.3]).
-     - Delete → confirm modal → `DELETE /sessions/{id}` [§11].
+     - Delete → confirm modal "Delete session? This also permanently deletes all outputs and attachments for this session." → `DELETE /sessions/{id}` [§11].
    - Click item: switch session (thay đổi route).
    - Empty state: "No sessions yet" + CTA "+ New session" inline.
    - Cap hiển thị 50 sessions; "Show more" expand list.
@@ -216,8 +216,9 @@ Scrollable container, full-width plain typography (no message bubbles). Mỗi me
 | `assistant.thinking` (fallback) | Atomic — treat như delta + end ngay lập tức (§7.1, §7.7) |
 | `tool.use` + `tool.result` (paired theo `tool_use_id`) | Tool call card (§7.2) |
 | `interaction.requested` (kind=question | plan) | Modal overlay (§7.3, §9) — stub "Awaiting your response…" trong stream |
+| `interaction.resolved` | Pop `pendingInteractions[tool_use_id]` — modal có thể đóng (§9.5) |
 | `todos.snapshot` | KHÔNG render trong stream — đi tới right sidebar Todos card (§10.4) |
-| `output.created` | Inline "Download" link gắn vào tool result chunk gần nhất (§7.2 + §15.5) |
+| `output.created` | (1) Append entry to top-level "Files generated" group card (`GeneratedFilesGroup`, render trên result divider). (2) Backward-compat: cũng attach `downloadAttachment` chip vào tool card cuối (§7.2 + §15.5). |
 | `result` | Result Block (§7.5) — đóng turn |
 | `system` | Render dạng meta line nhỏ, ẩn theo default (debug mode) |
 | `error` | Inline error notice trong stream + banner top (§13.5) |
@@ -275,7 +276,7 @@ Quy tắc verbatim từ user request. Mỗi type bind chặt vào một SSE even
   - Khi expand: full input JSON (code block) + Output panel inline (text/JSON/preview).
   - Output panel hỗ trợ scrolling; cap 2000 lines, "Show all" reveal full.
 - **Compressed read action:** nếu agent gọi nhiều `Read` consecutive trên distinct files → render one card "Read N files" với chevron expand list. Subset rule của chain detection.
-- **Inline output `output.created`:** khi `output.created` event đến, gắn một row "Download {title}" vào card cuối cùng của chain (xem §15.5). Click → `GET /outputs/{output_id}` hoặc `GET /kb/files/{kb_id}/versions/{version}/download` [§11].
+- **Inline output `output.created`:** khi `output.created` event đến: primary render là `GeneratedFilesGroup` card trên result divider (§15.5). Backward-compat: cũng gắn "Download {title}" chip vào tool card cuối. Cả hai branches luôn populate. Click → `GET /outputs/{output_id}` hoặc `GET /kb/files/{kb_id}/versions/{version}/download` [§11].
 - **Frontend invariant — Todo tools không vào stream:** Backend `core.py` filter Todo tools (`TaskCreate`/`TaskUpdate`/`TaskGet`/`TaskList`/`TodoWrite`) tại layer `_INTERACTIVE_TOOLS` ∪ `TODO_TOOL_NAMES` trước khi gọi `on_tool_use`. Frontend KHÔNG nhận được `tool.use` SSE cho nhóm này — chỉ nhận `todos.snapshot` [§8.4]. Vì vậy §7.2 KHÔNG cần defensive code "skip Todo tool" — backend đã đảm bảo. Xem §7.6.4 cho rendering rule.
 
 ### 7.3 Interactive message (modal popup)
@@ -583,11 +584,12 @@ Mỗi modal được trigger từ SSE event `interaction.requested` [§8.3, §11
 Đây là use case quan trọng nhất — agent hỏi `Where should the result be written?` + `Which KB file (and sheet)?` cùng lúc [§8.2 wire payload].
 
 - Backend send một `interaction.requested` với 2 questions trong cùng payload [§8.2]:
-  - Q1 header `Target` — options: `New .xlsx` / `New sheet` / `Pick sheet`.
+  - Q1 header `Target` — options: `New .xlsx` / `New .pptx` / `New .docx` / `New sheet` / `Pick sheet`.
   - Q2 header `Source` — options derived từ READY KB ∩ kb_scope, format `kb_<id>` hoặc `kb_<id>::<sheet>`, plus `N/A`.
 - **FE rendering:** vertical form 2 section.
 - **Dynamic enable rule:**
   - Khi user chọn Target = `New .xlsx` → Q2 hiện disabled state với hint "Source not needed for New .xlsx" + auto-set `selected: ["N/A"]`.
+  - Khi Target = `New .pptx` hoặc `New .docx` → Q2 disabled, auto-set `selected: ["N/A"]` (cùng rule như `New .xlsx`).
   - Khi user chọn Target = `New sheet` → Q2 enabled, chỉ show options dạng `kb_<id>` (whole-file). Sheet-level options grey out với hint "Use Pick sheet for sheet-level".
   - Khi user chọn Target = `Pick sheet` → Q2 enabled, show options dạng `kb_<id>::<sheet>`. Whole-file options grey out.
 - **Submit:** body cùng schema `AskUserQuestion` respond [§8.3]. Backend validate (Target, Source) pair theo bảng §8.2. Validation fail → backend `PermissionResultDeny(...)` → model re-emit, FE nhận một `interaction.requested` mới với cùng questions — render lại modal (sequential queue, §9.5).
@@ -605,6 +607,8 @@ Khi reconnect mid-modal, banner "You have an unanswered question from the agent.
 ### 9.5 Sequential queue
 
 Nếu nhiều `interaction.requested` đến gần nhau (vd backend re-park sau validation fail), FE keep một in-memory FIFO queue và render từng modal một. Modal đang mở phải resolve (submit hoặc dismiss) trước khi modal tiếp theo open. UI cue: badge "1 of 2 pending" ở header modal khi queue có >1 item [§8.3 edge case "Two interactions queued back-to-back"].
+
+Khi backend xử lý xong `/respond` POST, emit `interaction.resolved {tool_use_id, kind}`; FE filter `pendingInteractions[tool_use_id]` trên event này. Submit path: FE optimistically pop locally; server-side `resolved` event confirms.
 
 ### 9.6 Reopen — load chat history
 
@@ -630,9 +634,10 @@ Stacked collapsible cards. Mỗi card collapse independent; trạng thái persis
 - **Source:** `GET /kb/files` [§11], poll khi card mở (default 5s) hoặc trigger refresh manual.
 - **Body:** checklist KB rows.
   - Row format: checkbox + filename + status chip (xem §13.1) + meta line (size, last updated).
-  - **Checkable rule:** chỉ rows có `status=READY` checkable [§8.5]. Non-READY rows greyed out, checkbox disabled, hover tooltip hiện status text:
+  - **Checkable rule:** chỉ rows có `status=READY` (hoặc `READY_PARTIAL` với warning) checkable [§8.5]. Non-READY rows greyed out, checkbox disabled, hover tooltip hiện status text:
     - `PENDING` → "Queued — preprocess not started"
-    - `PROCESSING` → "Preprocessing in progress…"
+    - `PROFILING` → "Profiling in progress — memory note being generated…"
+    - `READY_PARTIAL` → checkable (enabled) với amber warning tooltip "Profiler incomplete — memory note unavailable; agent sẽ đọc raw.xlsx trực tiếp qua xlsx skill".
     - `FAILED` → "Preprocess failed — open KB Manager to retry"
 - **Footer:**
   - Count line: "Scope: 3 of 7 READY KBs" (default-all hiển thị "Scope: All READY KBs (7)").
@@ -662,6 +667,7 @@ Stacked collapsible cards. Mỗi card collapse independent; trạng thái persis
   - Download icon → trigger `GET /outputs/{output_id}` [§11] → browser download.
 - **Live update:** khi có SSE event `output.created` cho session này [§8.2, §11], prepend row mới với highlight animation.
 - **Empty state:** "Outputs created during this session will appear here."
+- **Note:** mỗi `output.created` cũng append entry vào "Files generated" group card render trên result divider của turn (`GeneratedFilesGroup`) — card đó và sidebar card này là 2 view song song của cùng outputs.
 
 ### 10.4 Card "Todos"
 
@@ -706,18 +712,19 @@ Quản lý long-term KB files. Layout: full-width main column (right sidebar ẩ
 | Versions | derived: `GET /kb/files/{kb_id}/versions` count [§11] | "v1 · v2 · v3" hoặc "—" nếu chưa có version (chỉ raw.xlsx) |
 | Actions | per-row | Re-sync / Delete / View |
 
-**Polling:** spec nói "Polling/refresh is the FE's responsibility" [§8.5]. FE poll `GET /kb/files` mỗi 5s khi có ít nhất một row trong status `PROCESSING` hoặc `PENDING`. Khi không còn — stop polling. Open question §17: backend có push status không.
+**Polling:** spec nói "Polling/refresh is the FE's responsibility" [§8.5]. FE poll `GET /kb/files` mỗi 5s khi có ít nhất một row trong status `PROFILING` hoặc `PENDING`. Khi không còn — stop polling. Open question §17: backend có push status không.
 
-**FAILED row:** chip đỏ, hover tooltip hiển thị reason (đọc từ manifest stub theo §5.1). Action button "Retry preprocess" → re-upload cùng file (frontend prompt user upload lại) — spec không expose retry endpoint trực tiếp [§11], thực tế bằng `DELETE /kb/files/{id}` + `POST /kb/files` mới. Open question §17.
+**FAILED row:** chip đỏ, hover tooltip hiển thị reason (đọc từ `KbMeta.error` field trong `GET /kb/files/{kb_id}` response). Action button "Retry preprocess" → `POST /kb/files/{id}/reprofile` [§11].
 
 ### 11.3 Row click → drawer detail
 
 Drawer trượt từ phải, ~50% viewport width. Nội dung:
 
-- **Manifest preview:**
-  - Source: `GET /kb/files/{id}/manifest` [§11].
-  - Hiển thị: sheets list → mỗi sheet expand thấy `regions[]` với `range`, `header_row`, `columns[]` (name + dtype + role + null% + min/max).
-  - Relationships section: list FK inferences với confidence score [§5.1 manifest schema].
+- **Memory note:**
+  - Source: `GET /kb/files/{id}/memory` [§11].
+  - Returns Markdown freetext written by `kb_profiler` subagent. Render as formatted Markdown.
+  - Khi `status=READY_PARTIAL` hoặc memory file vắng: hiển thị inline notice "Memory note unavailable — profiler did not complete".
+  - Không còn structured `sheets`/`regions`/`relationships` tree (`manifest.json` deprecated).
 - **Version history sub-panel:**
   - Source: `GET /kb/files/{kb_id}/versions` [§11].
   - List rows: version label (`raw`, `v2`, `v3`, …) + sidecar meta nếu có:
@@ -728,7 +735,7 @@ Drawer trượt từ phải, ~50% viewport width. Nội dung:
 
 ### 11.4 Re-sync action
 
-Trên row READY: button "Re-sync" → confirm modal "Re-sync replaces raw.xlsx and re-runs preprocessing. Versions are preserved. Continue?" → upload mới [§7]. Sau upload, status quay về `PROCESSING` [§5.1].
+Trên row READY: button "Re-sync" → confirm modal "Re-sync replaces raw.xlsx and re-generates the memory note. Versions are preserved. Continue?" → `POST /kb/files/{id}/reprofile` [§11]. Status transitions `PENDING → PROFILING`.
 
 ### 11.5 Empty state
 
@@ -746,7 +753,8 @@ Full-width table, list **standalone** outputs only (`kind=standalone`) [§8.2]. 
 
 ### 12.1 Filter chips
 
-- "All sessions" (default) — `GET /outputs` [§11].
+- Default: filter theo current `sessionId` (component prop) — `GET /outputs?session_id={sid}` [§11].
+- "All sessions" toggle bật → `GET /outputs` không filter [§11].
 - Per-session chips (vd "Session: Compare Q1 Q2 …") — `GET /outputs?session_id={sid}` [§11]. Chip generated từ existing sessions list.
 
 ### 12.2 Table columns
@@ -774,14 +782,15 @@ Drawer hiển thị toàn bộ `meta.json` fields [§8.2 schema], plus action bu
 
 ### 13.1 KB status chips
 
-Bind theo state machine `PENDING → PROCESSING → READY | FAILED` [§5.1, §8.5]:
+Bind theo state machine `PENDING → PROFILING → READY | READY_PARTIAL | FAILED` [§5.1, §8.5]:
 
 | Status | Visual cue | Tooltip / meta |
 |---|---|---|
 | `PENDING` | Neutral chip "Pending" + clock icon | "Queued — preprocess not started" |
-| `PROCESSING` | Blue chip "Processing" + spinner | "Preprocessing in progress…" + estimated step text nếu có |
-| `READY` | Green chip "Ready" + check icon | "Ready · {N} sheets · {M} regions" |
-| `FAILED` | Red chip "Failed" + ! icon | "Preprocess failed: {reason from manifest stub}" + Retry button |
+| `PROFILING` | Blue chip "Profiling" + spinner | "Memory note being written by profiler…" |
+| `READY` | Green chip "Ready" + check icon | "Ready · memory note available" |
+| `READY_PARTIAL` | Yellow/amber chip "Ready (partial)" + warning icon | "Profiler failed but raw.xlsx is still usable — memory note unavailable" |
+| `FAILED` | Red chip "Failed" + ! icon | "Preprocess failed: {KbMeta.error}" + Retry button |
 
 ### 13.2 Turn states (chat screen)
 
@@ -790,7 +799,7 @@ State machine: `idle → running → (awaiting_user nếu interaction) → compl
 | State | Composer | Header indicator | Notes |
 |---|---|---|---|
 | `idle` | Enabled | "Ready" hoặc no indicator | Default. |
-| `running` | Disabled, label "Working…" | Pulsing dot + "Working…" | SSE stream open; tool calls/thinking flowing. Bao gồm cả "thinking" và "actively streaming text" — không có sub-state riêng (§7.7). |
+| `running` | Disabled | Pulsing dot; label cycles: "Thinking" (model reasoning) → clears on first text delta → "Running {tool_name}" mỗi tool call. Không dùng "Working…" label. | SSE stream open; tool calls/thinking flowing. Bao gồm cả "thinking" và "actively streaming text" — không có sub-state riêng (§7.7). |
 | `awaiting_user` | Disabled | "Awaiting your input" | Modal interaction open. Composer cũng có hint "Answer the question to continue." |
 | `completed` | Enabled | "Ready" | `result` event đã đến. |
 | `aborted` / `error` | Enabled | "Aborted" / "Error" + retry hint | Banner đỏ với detail error nếu có. |
@@ -894,7 +903,7 @@ sequenceDiagram
     FE->>FE: render banner trên composer (§13.5); composer back to idle
   else valid
     API->>Reg: validate kb_scope (exists + status=READY)
-    API->>API: read manifests, build <scope> block (§8.5)
+    API->>API: read memory notes, build <scope> block (§8.5)
     API->>SDK: client.query(prompt prepended with <scope>)
     Note over FE: turn state -> running; composer disabled
     loop SSE stream
@@ -921,18 +930,22 @@ sequenceDiagram
   U->>FE: click "+ Upload", chọn file.xlsx
   FE->>API: POST /kb/files (multipart)
   API->>FS: write kb/<id>/raw.xlsx
-  API-->>FE: 201 {kb_id, status: "PENDING"}
+  API-->>FE: 202 KbFileResponse(status=PENDING)
   FE->>FE: prepend row, status chip = Pending
   API->>BG: enqueue preprocess
-  BG->>FS: status -> PROCESSING
+  BG->>FS: status -> PROFILING
   FE->>API: GET /kb/files (poll every 5s)
-  API-->>FE: row status=PROCESSING (with spinner)
-  BG->>FS: detect regions, profile, write manifest.json
+  API-->>FE: row status=PROFILING (with spinner)
+  BG->>FS: kb_profiler subagent runs, writes <kb_id>.md memory note
   alt success
     BG->>FS: status -> READY
     FE->>API: next poll
     API-->>FE: status=READY
     FE->>FE: chip xanh; checkbox enabled trong scope card mọi session
+  else partial result
+    BG->>FS: status -> READY_PARTIAL
+    API-->>FE: status=READY_PARTIAL
+    FE->>FE: chip amber + warning tooltip
   else failure
     BG->>FS: status -> FAILED + reason
     API-->>FE: status=FAILED
@@ -1019,7 +1032,7 @@ sequenceDiagram
   participant U as User
 
   M->>SDK: tool_use Bash/xlsx (write file)
-  SDK->>FS: write outputs/<id>/file.xlsx OR kb/<id>/versions/v<N>.xlsx
+  SDK->>FS: write outputs/<session_id>/<output_id>/<filename>
   SDK->>BE: forward tool_result
   BE->>BE: outputs.register(...) — read meta from FS, persist meta.json (§8.2)
   BE-->>FE: SSE output.created {output_id|kb_id+version, kind, title, download_url}
@@ -1081,7 +1094,7 @@ sequenceDiagram
 Mọi anti-pattern dưới đây đến từ `technical-spec §13` hoặc constraint design:
 
 - **Render todo từ `tool.use` thay vì `todos.snapshot`** — race với apply state, row có thể hiện rồi biến mất nếu SDK không apply. Phải đợi `todos.snapshot` derived từ `tool_result` [§8.4 + §13].
-- **Cho check non-READY KB** — race với preprocess pipeline, manifest có thể chưa tồn tại hoặc đang bị rewrite. Phải grey out non-READY rows [§8.5 + §13].
+- **Cho check non-READY KB** — race với preprocess pipeline, memory note có thể chưa tồn tại hoặc đang bị rewrite. Phải grey out non-READY rows [§8.5 + §13].
 - **Treat `kb_scope:[]` là "no KBs"** — empty array bị backend reject với 400 [§8.5 rule 1, §13]. UI phải force user explicit (omit field cho default-all, hoặc tick ít nhất 1 KB).
 - **Auto-resolve modal mà không user input** — defeats human-in-the-loop guarantee [§13, Golden Rule 5 §12]. Modal MUST chờ user submit hoặc dismiss; dismiss có semantic rõ (§9.1 / §9.2 dismiss flow).
 - **Hard-fail unknown SSE event** — phải no-op forward-compat clause [§11, §13]. Khi backend thêm event type mới, FE cũ vẫn chạy.
