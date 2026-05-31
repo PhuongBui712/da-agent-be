@@ -8,6 +8,7 @@ UI and get the same behavior.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import time
 from typing import Any, Callable
@@ -45,6 +46,34 @@ from .todos import TodoStore, TODO_TOOL_NAMES
 # todo overlay) renders them instead.
 _INTERACTIVE_TOOLS = {"AskUserQuestion", "ExitPlanMode"} | TODO_TOOL_NAMES
 
+# Phase C 2026-05-31 — assistant text scrubber (Risk #3 mitigation).
+# Replace any absolute filesystem path that ends in a known deliverable
+# extension with the basename only. Belt-and-suspenders against the agent
+# leaking `/data/...` / `/home/...` paths in chat text despite the prompt
+# saying "filename only". Applied to atomic on_text blocks; delta streaming
+# may still leak partial paths across chunk boundaries — see `_scrub_path_leaks`.
+_PATH_LEAK_RE = re.compile(
+    r"/(?:data|home|tmp|var)[\w/.\-]+\.(?:xlsx|xlsm|csv|tsv|pptx|docx|json|md)"
+)
+
+
+def _scrub_path_leaks(text: str) -> str:
+    """Replace absolute filesystem paths with their basename.
+
+    Atomic-only: deltas are passed through unchanged because a path may span
+    two `text_delta` chunks. The final atomic `on_text` (emitted when
+    streaming is disabled OR as a non-suppressed trailing block) is the
+    authoritative copy and gets scrubbed here. Documented limitation: when
+    streaming is on, an in-flight delta may briefly show a leaked path before
+    the atomic block lands; the prompt is still the primary defense.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        path = match.group(0)
+        return path.rsplit("/", 1)[-1] or path
+
+    return _PATH_LEAK_RE.sub(_replace, text)
+
 _BASE_TOOLS = [
     "Read",
     "Write",
@@ -66,6 +95,7 @@ class AgentRunner:
         ui: AgentUI,
         settings: Settings | None = None,
         *,
+        session_id: str | None = None,
         on_output_detection: Callable[[OutputDetection], None] | None = None,
         resume_sdk_session_id: str | None = None,
         resolve_target: ResolveTarget | None = None,
@@ -86,12 +116,17 @@ class AgentRunner:
         # CLI passes None (no path resolution); web wires a closure that has
         # access to the per-session state.
         self._resolve_target = resolve_target
+        # Phase C 2026-05-31 — observer scopes detection to a single session's
+        # outputs subtree. CLI invocations have no real session id; we use
+        # `_cli` as a sentinel that still produces a valid (if unused) path.
+        observer_session_id = session_id or "_cli"
         # Spec §8.2 — observe Write/Edit/Bash tool calls and surface detected
-        # writes under outputs_dir/<id>/ or kb_dir/<kb_id>/versions/. CLI passes
-        # no callback (`on_output_detection=None`) and the observer becomes a
+        # writes under outputs_dir/<session_id>/<out_id>/. CLI passes no
+        # callback (`on_output_detection=None`) and the observer becomes a
         # silent sink; the server wires the bridge into AppState.outputs.
         self._outputs_observer = OutputsObserver(
             outputs_dir=self.settings.outputs_dir,
+            session_id=observer_session_id,
             kb_dir=self.settings.kb_dir,
             attachments_dir=self.settings.attachments_dir,
             on_detect=on_output_detection or (lambda _det: None),
@@ -306,7 +341,11 @@ class AgentRunner:
                 self.ui.on_thinking(block.thinking)
         elif isinstance(block, TextBlock):
             if block.text.strip():
-                self.ui.on_text(block.text)
+                # Phase C 2026-05-31 — scrub absolute path leaks in chat text
+                # before they reach the UI. Primary defense is the prompt;
+                # this is belt-and-suspenders. Atomic blocks only — deltas
+                # may span chunk boundaries and are not buffered here.
+                self.ui.on_text(_scrub_path_leaks(block.text))
         elif isinstance(block, ToolUseBlock):
             if block.name in TODO_TOOL_NAMES:
                 self._absorb_todo_tool_use(block)
