@@ -39,6 +39,14 @@ class Settings:
         default_factory=lambda: _int_env("DA_AGENT_MAX_TURNS")
     )
 
+    # Ingestion profiler (kb_profiler subagent) — separate from in-session
+    # analysis (which inherits the main `model` above). Defaults to the SDK's
+    # `opus` alias so the env-configured ANTHROPIC_DEFAULT_OPUS_MODEL applies;
+    # set DA_AGENT_KB_PROFILER_MODEL to a full id to pin a specific opus build.
+    kb_profiler_model: str = field(
+        default_factory=lambda: os.getenv("DA_AGENT_KB_PROFILER_MODEL", "opus")
+    )
+
     # Start each session in plan mode so complex requests produce a plan + approval
     # (demonstrates the approval UX). Flip to False for straight-to-execution.
     plan_first: bool = field(
@@ -115,6 +123,27 @@ class Settings:
     def skills_dir(self) -> Path:
         return self.project_root / ".claude" / "skills"
 
+    @property
+    def agent_memory_dir(self) -> Path:
+        """Persistent memory for ingestion subagents.
+
+        Lives under the app data root (`~/.da-agent/agent-memory/`) so it
+        survives across dev/prod environments and is independent of the
+        repo checkout. Per-agent subdirs are created on first write.
+
+        We intentionally do NOT use the SDK's `memory="local"` field on the
+        kb_profiler subagent: that scope hard-codes the path to
+        `<project_root>/.claude/agent-memory-local/`, which leaks profile
+        artefacts into a developer's checkout. We pass the absolute path
+        explicitly in the invocation prompt instead.
+        """
+        return self.data_root / "agent-memory"
+
+    @property
+    def kb_profiler_memory_dir(self) -> Path:
+        """`<data_root>/agent-memory/kb_profiler/` — where per-KB notes land."""
+        return self.agent_memory_dir / "kb_profiler"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.data_root,
@@ -122,6 +151,7 @@ class Settings:
             self.sessions_dir,
             self.outputs_dir,
             self.attachments_dir,
+            self.kb_profiler_memory_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
