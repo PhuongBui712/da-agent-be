@@ -45,11 +45,23 @@ def test_sandbox_settings_shape_and_invariants():
         )
 
 
-def test_sandbox_network_denies_all():
+def test_sandbox_network_allows_only_package_registries():
+    """Container is the host-isolation layer; sandbox network allowlist
+    is intentionally narrow — only PyPI and npm/yarn registry mirrors plus
+    GitHub raw (skill setup scripts may reference it).
+    """
     sb = build_sandbox_settings()
     net = sb["network"]
-    assert net["deniedDomains"] == ["*"]
-    assert net["allowedDomains"] == []
+    assert net["deniedDomains"] == []
+    assert set(net["allowedDomains"]) == {
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+        "registry.yarnpkg.com",
+        "github.com",
+        "objects.githubusercontent.com",
+        "raw.githubusercontent.com",
+    }
     assert net["allowAllUnixSockets"] is False
     assert net["allowLocalBinding"] is False
 

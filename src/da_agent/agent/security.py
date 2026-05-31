@@ -92,8 +92,17 @@ def build_sandbox_settings() -> SandboxSettings:
             ":(){ :|:& };:",  # fork bomb
         ],
         network=SandboxNetworkConfig(
-            allowedDomains=[],
-            deniedDomains=["*"],
+            # Container is host-isolation; allow pip/npm registries only.
+            allowedDomains=[
+                "pypi.org",
+                "files.pythonhosted.org",
+                "registry.npmjs.org",
+                "registry.yarnpkg.com",
+                "github.com",
+                "objects.githubusercontent.com",
+                "raw.githubusercontent.com",
+            ],
+            deniedDomains=[],
             allowManagedDomainsOnly=False,
             allowUnixSockets=[],
             allowAllUnixSockets=False,
