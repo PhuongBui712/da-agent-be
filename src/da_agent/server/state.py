@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Settings
-from ..kb import KbRegistry
+from ..ingestion import IngestionRegistry
 from ..outputs import OutputsRegistry
 from .attachments_registry import AttachmentsRegistry
 
@@ -272,7 +272,10 @@ class AppState:
         self.settings = settings
         self.registry = SessionRegistry(settings.data_root / "registry.json")
         self.interactions = InteractionStore()
-        self.kb = KbRegistry(settings.kb_dir / "registry.json")
+        # Same on-disk file as the legacy KbRegistry; the new IngestionRegistry
+        # extends the schema (status enum + memory_path) and migrates legacy
+        # PROCESSING rows to FAILED on load.
+        self.kb = IngestionRegistry(settings.kb_dir / "registry.json")
         self.attachments = AttachmentsRegistry(settings.attachments_dir)
         # Spec §8.2 — standalone outputs registry. KB-bound outputs live in
         # `kb/<kb_id>/versions/` sidecars (spec §7) and are NOT in here.
