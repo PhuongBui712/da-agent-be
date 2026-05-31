@@ -31,24 +31,56 @@ def build_subagents() -> dict[str, AgentDefinition]:
             description="Runs the quantitative analysis: aggregations, joins, statistics, "
             "and hypothesis testing against one or more sheets.",
             prompt=(
-                "You perform rigorous data analysis. Given a profiled dataset and a "
-                "question or hypothesis, compute the answer in pandas, validate "
-                "intermediate results, and report findings with the numbers that support "
-                "them. State assumptions and any data-quality caveats."
+                "You execute Phase 3 (data preparation) and Phase 4 (hypothesis testing) "
+                "of the data-analysis workflow.\n"
+                "\n"
+                "Phase 3 — produce an analysis-ready dataset:\n"
+                "  - Handle missing values per column (drop / impute / flag), document each "
+                "    decision.\n"
+                "  - Remove duplicates with explicit dedup keys; log how many rows were "
+                "    removed.\n"
+                "  - Standardize dates (format + timezone), currencies (single unit), and "
+                "    categorical synonyms.\n"
+                "  - Build the analytical dataset by joining sheets on the keys identified "
+                "    in profiling. Verify row counts after every join — unexpected inflation "
+                "    signals a grain mismatch and you must stop to investigate.\n"
+                "\n"
+                "Phase 4 — test each hypothesis:\n"
+                "  - State the hypothesis, define the test (segment compare, trend, funnel, "
+                "    cohort, correlation, contribution, or outlier), execute in pandas, and "
+                "    state the verdict (confirmed / rejected / inconclusive) with the "
+                "    numbers that support it.\n"
+                "  - Always compare against a baseline (prior period, benchmark, control). "
+                "    Distinguish real signal from noise.\n"
+                "  - State assumptions and any data-quality caveats.\n"
+                "\n"
+                "Return a compact structured summary with derived dataset shape, cleaning "
+                "decisions, and per-hypothesis verdicts. Do not return raw rows."
             ),
             tools=_READONLY,
             skills=["xlsx"],
         ),
-        "visualizer": AgentDefinition(
-            description="Produces charts, pivot tables, and new summary sheets from "
-            "analysis results, registered as a downloadable .xlsx output.",
+        "reporter": AgentDefinition(
+            description="Produces the Phase 6 deliverable: writes the final analytical "
+            "artifact (.xlsx workbook, .pptx deck, or .docx report) to the resolved "
+            "target path.",
             prompt=(
-                "You turn analysis results into clear deliverables: charts, pivot tables, "
-                "and summary sheets. Use the xlsx skill. Keep spreadsheets formula-driven "
-                "and free of formula errors. Write to the resolved output target path "
-                "supplied by the AskUserQuestion tool_result and report that path."
+                "You produce the Phase 6 deliverable for the data-analysis workflow. "
+                "Pick the right SDK skill based on `resolved_target_kind` and the file "
+                "extension of `resolved_target_path` returned in the AskUserQuestion "
+                "tool_result:\n"
+                "  - `.xlsx` / `.xlsm` → use the `xlsx` skill (formula-driven, zero "
+                "    formula errors, professional formatting per skill rules).\n"
+                "  - `.pptx`           → use the `pptx` skill (executive-summary slide "
+                "    first, one message per slide, follow the skill's slide structure).\n"
+                "  - `.docx`           → use the `docx` skill (lead with executive "
+                "    summary, follow the skill's section structure).\n"
+                "Write to `resolved_target_path` verbatim — never invent a path or "
+                "use a scratch directory. State the on-disk path in your final reply. "
+                "Spreadsheets stay formula-driven and free of #REF/#DIV/0 errors. "
+                "Slides and docs lead with the answer; supporting detail follows."
             ),
             tools=_READWRITE,
-            skills=["xlsx"],
+            skills=["xlsx", "pptx", "docx"],
         ),
     }
