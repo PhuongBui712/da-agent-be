@@ -2,16 +2,16 @@
 
 Watches Write/Edit/Bash tool calls; on tool_result without error, classifies
 the input.file_path or Bash command for paths under the session-scoped
-outputs layout (Phase C 2026-05-31):
+outputs layout (Phase A 2026-06-01):
 
-  outputs/<session_id>/<out_id>/<filename>          -> standalone
+  outputs/<session_id>/<filename>          -> standalone
 
-DEPRECATED 2026-05-31 (Golden Rule 4 broken per user approval): the
-`kb_version` and `attachment_version` branches no longer fire — KB-bound and
-attachment-bound writes are now routed through the standalone layout via
-`resolved_target_path`. The detection branches remain in code so tests can
-assert they return None and to keep the dataclass shape stable for any
-downstream consumer.
+Direct children of `outputs/<session_id>/` only — anything 2+ levels deep,
+or sidecar `.<output_id>.meta.json` files, are rejected.
+
+DEPRECATED: the `kb_version` and `attachment_version` branches no longer
+fire — KB-bound and attachment-bound writes are routed through the
+standalone layout via `resolved_target_path`.
 
 Emits a detection through `on_detect`; the runner bridges that into the
 async registry + UI.
@@ -27,36 +27,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-# v_curr / v_prev with the common spreadsheet/CSV-family extensions. Kept
-# narrow to avoid mis-classifying non-output files (e.g. helper sidecars).
-_VERSION_FILE_RE = re.compile(r"^v_(curr|prev)\.(xlsx|xlsm|xls|csv|tsv)$")
 # Bash: `> path` redirection or an `--output` flag. Conservative: only flags
 # we know mean "output target".
 _BASH_REDIR_RE = re.compile(r"(?:>\s*|--output[= ])(\S+)")
 _WRITE_TOOLS = {"Write", "Edit", "NotebookEdit"}
+_SIDECAR_RE = re.compile(r"^\.out_[0-9a-f]{16}\.meta\.json$")
 
 
 @dataclass(slots=True)
 class OutputDetection:
     """One of three kinds (spec §8.2).
 
-    Phase C 2026-05-31: only `standalone` is emitted in practice. The other
+    Phase A 2026-06-01: only `standalone` is emitted in practice. The other
     two literals are retained for type stability.
     """
 
     kind: Literal["standalone", "kb_version", "attachment_version"]
     file_path: Path
-    # standalone — outputs dir name and relative filename
-    output_id: str | None = None
-    filename: str | None = None
-    # kb_version — owning kb_id and slot ("v_curr" | "v_prev")
-    kb_id: str | None = None
-    # attachment_version — owning session + attachment ids
-    session_id: str | None = None
-    attachment_id: str | None = None
-    # version slot string ("v_curr" | "v_prev"); shared by kb_version and
-    # attachment_version kinds.
-    version: str | None = None
+    filename: str
+    session_id: str
 
 
 class OutputsObserver:
@@ -82,14 +71,33 @@ class OutputsObserver:
         # tool_use_ids whose detection has fired — guards against duplicate
         # emissions if the SDK forwards a tool_result twice.
         self._fired: set[str] = set()
+        # Paths already emitted via the dir-scan path — prevents re-firing the
+        # same file on a subsequent tool_result if the snapshot wasn't refreshed.
+        self._fired_paths: set[Path] = set()
+        # Snapshot of non-sidecar files directly under the session outputs dir.
+        # Refreshed at every observe_tool_use; diffed at every observe_tool_result.
+        self._dir_snapshot: set[Path] = self._snapshot_dir()
 
     def reset(self) -> None:
         self._pending.clear()
         self._fired.clear()
+        self._fired_paths.clear()
+
+    def _snapshot_dir(self) -> set[Path]:
+        """Return current set of non-sidecar files directly under the session
+        outputs dir. Returns empty set if dir doesn't exist yet."""
+        if not self._session_outputs_dir.exists():
+            return set()
+        return {
+            p for p in self._session_outputs_dir.iterdir()
+            if p.is_file() and not _SIDECAR_RE.match(p.name)
+        }
 
     def observe_tool_use(
         self, tool_use_id: str, name: str, tool_input: dict[str, Any]
     ) -> None:
+        if name in {"Bash", "Write", "Edit", "NotebookEdit"}:
+            self._dir_snapshot = self._snapshot_dir()
         if name in _WRITE_TOOLS:
             fp = tool_input.get("file_path") or tool_input.get("path")
             if isinstance(fp, str):
@@ -122,8 +130,22 @@ class OutputsObserver:
             det = self._classify(p)
             if det is not None:
                 self._fired.add(tool_use_id)
+                self._fired_paths.add(det.file_path)
                 self._on_detect(det)
                 return  # one detection per tool_use is enough
+
+        # Post-result directory scan — catches writes that didn't go through a
+        # shell redirect (Python heredoc, shutil.copy, pd.to_excel, Write tool).
+        current = self._snapshot_dir()
+        new_paths = current - self._dir_snapshot
+        for path in sorted(new_paths):
+            if path in self._fired_paths:
+                continue
+            det = self._classify(path)
+            if det is not None:
+                self._fired_paths.add(path)
+                self._on_detect(det)
+        self._dir_snapshot = current
 
     def _classify(self, path: Path) -> OutputDetection | None:
         try:
@@ -137,26 +159,22 @@ class OutputsObserver:
             resolved = resolved.resolve(strict=False)
         except OSError:
             return None
-        # Standalone branch (Phase C): require `outputs/<session_id>/<out_*>/<filename>`.
-        # Reject paths under another session's dir or under outputs/ without
-        # a session prefix.
-        if _is_under(resolved, self._session_outputs_dir):
-            rel = resolved.relative_to(self._session_outputs_dir)
-            parts = rel.parts
-            if len(parts) >= 2 and parts[0].startswith("out_"):
-                return OutputDetection(
-                    kind="standalone",
-                    file_path=resolved,
-                    output_id=parts[0],
-                    filename="/".join(parts[1:]),
-                )
-            return None
-        # DEPRECATED 2026-05-31: Golden Rule 4 broken per user approval.
-        # KB writes now redirect to outputs/<sid>/<out_id>/. The branch is
+        # Standalone branch (Phase A): require direct child of
+        # `outputs/<session_id>/`. Reject deeper paths and sidecar files.
+        if resolved.parent == self._session_outputs_dir:
+            if _SIDECAR_RE.match(resolved.name):
+                return None
+            return OutputDetection(
+                kind="standalone",
+                file_path=resolved,
+                filename=resolved.name,
+                session_id=self._session_id,
+            )
+        # DEPRECATED: KB writes now redirect to outputs/<sid>/. The branch is
         # kept for symmetry / regression assertions but never emits.
         if _is_under(resolved, self._kb_dir):
             return None
-        # DEPRECATED 2026-05-31: same as above for attachment-bound writes.
+        # DEPRECATED: same for attachment-bound writes.
         if _is_under(resolved, self._attachments_dir):
             return None
         return None
