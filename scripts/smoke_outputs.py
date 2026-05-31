@@ -7,6 +7,8 @@ Asks the agent to create a tiny .xlsx via the running BE, then verifies:
   * assistant text contains NO absolute path leak (path-scrubbing works)
   * `DELETE /sessions/<sid>` wipes the per-session outputs subtree
 
+Loads credentials from (1) shell env vars, then (2) repo-root `.env` file if missing.
+
 Opt-in. CI does NOT run this. Run manually after starting the BE locally:
 
     # Terminal 1: boot the backend
@@ -26,6 +28,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -63,12 +66,28 @@ class CheckResult:
             self.failures.append(label)
 
 
+def _maybe_load_dotenv() -> None:
+    """Best-effort .env loader at repo root. Sets only vars not already in os.environ."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value:
+            os.environ.setdefault(key, value)
+
+
 def _have_api_key() -> bool:
-    return bool(
-        os.environ.get("ANTHROPIC_API_KEY")
-        or os.environ.get("DATABRICKS_TOKEN")
-        or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
-    )
+    keys = ("ANTHROPIC_API_KEY", "DATABRICKS_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")
+    if any(os.environ.get(k) for k in keys):
+        return True
+    _maybe_load_dotenv()
+    return any(os.environ.get(k) for k in keys)
 
 
 def _parse_sse_chunk(buf: str) -> tuple[str, dict] | None:
@@ -196,14 +215,17 @@ def main() -> int:
             f"status={head.status_code}",
         )
 
-        # 3c. On-disk file exists under outputs/<sid>/<out_id>/
+        # 3c. On-disk file exists under outputs/<sid>/ (Phase C flat layout)
         sid_dir = OUTPUTS_ROOT / sid
-        out_dir = sid_dir / output_id
-        files = list(out_dir.glob("*.xlsx")) if out_dir.exists() else []
+        files = (
+            sorted(p for p in sid_dir.glob("*.xlsx") if not p.name.startswith("."))
+            if sid_dir.exists()
+            else []
+        )
         res.check(
-            "on-disk file exists under outputs/<sid>/<out_id>/",
+            "on-disk file exists under outputs/<sid>/",
             len(files) >= 1,
-            f"dir={out_dir} files={[f.name for f in files]}",
+            f"dir={sid_dir} files={[f.name for f in files]}",
         )
 
         # 3d. No absolute-path leak in assistant.text
@@ -233,12 +255,141 @@ def main() -> int:
             f"dir={sid_dir}",
         )
 
+        # --- 7. Dummy retail excel (end-to-end user scenario) ---------------
+        print("\n[smoke] phase 7: dummy retail excel")
+        r2 = client.post(f"{URL}/sessions", json={"name": "smoke-retail"})
+        if r2.status_code != 201:
+            print(f"=== FAIL: POST /sessions (phase 7) -> {r2.status_code} {r2.text} ===")
+            return 1
+        sid_2 = r2.json()["id"]
+        print(f"[smoke] phase-7 session id = {sid_2}")
+
+        retail_prompt = (
+            "Tạo 1 file excel dummy về chủ đề retail (3-5 cột, 5-10 hàng dữ liệu giả)."
+        )
+        try:
+            events_2 = _stream_turn_with_autoanswer(client, sid_2, retail_prompt)
+        except Exception as exc:  # noqa: BLE001
+            print(f"=== FAIL: SSE stream error (phase 7): {exc} ===")
+            _try_delete(client, sid_2)
+            return 1
+        print(f"[smoke] phase-7 turn done — {len(events_2)} events")
+
+        output_events_2 = [(t, p) for t, p in events_2 if t == "output.created"]
+
+        # 7a. at least 1 output.created event
+        res.check(
+            "phase7: output.created event arrived",
+            len(output_events_2) >= 1,
+            f"got {len(output_events_2)} event(s)",
+        )
+
+        # 7b. exactly 1 .xlsx on disk under outputs/<sid_2>/
+        sid_2_dir = OUTPUTS_ROOT / sid_2
+        xlsx_files = (
+            [p for p in sid_2_dir.iterdir() if p.suffix == ".xlsx"]
+            if sid_2_dir.exists()
+            else []
+        )
+        res.check(
+            "phase7: exactly 1 .xlsx under outputs/<sid_2>/",
+            len(xlsx_files) == 1,
+            f"dir={sid_2_dir} xlsx_files={[f.name for f in xlsx_files]}",
+        )
+
+        # 7c. GET /outputs?session_id=<sid_2> returns >= 1 entry with .xlsx filename
+        list_r = client.get(f"{URL}/outputs", params={"session_id": sid_2})
+        entries = list_r.json() if list_r.status_code == 200 else []
+        xlsx_entries = [e for e in entries if str(e.get("filename", "")).endswith(".xlsx")]
+        res.check(
+            "phase7: GET /outputs?session_id returns >= 1 .xlsx entry",
+            len(xlsx_entries) >= 1,
+            f"status={list_r.status_code} entries={len(entries)} xlsx={len(xlsx_entries)}",
+        )
+
+        _try_delete(client, sid_2)
+
     # --- Summary -----------------------------------------------------------
     if not res.failures:
         print("\n=== PASS ===")
         return 0
     print(f"\n=== FAIL: {len(res.failures)} check(s): {res.failures} ===")
     return 1
+
+
+def _stream_turn_with_autoanswer(
+    client: httpx.Client, sid: str, prompt: str
+) -> list[tuple[str, dict]]:
+    """Stream a turn that may include AskUserQuestion interactions.
+
+    When `interaction.requested` arrives mid-stream, the response is posted
+    from a background thread (separate httpx.Client — sharing the foreground
+    client across threads is unsafe) so the server's awaited future resolves
+    and more SSE events flow on the same connection.
+    """
+    events: list[tuple[str, dict]] = []
+    answer_threads: list[threading.Thread] = []
+
+    def _post_answer(tool_use_id: str, answers: list[dict]) -> None:
+        # Use a fresh client because httpx.Client is not thread-safe across
+        # streams; the foreground client owns the open stream connection.
+        with httpx.Client(timeout=15.0) as bg:
+            try:
+                bg.post(
+                    f"{URL}/sessions/{sid}/interactions/{tool_use_id}/respond",
+                    json={"answers": answers},
+                )
+            except Exception:
+                # surface the failure into events so the caller sees it
+                events.append(("interaction.respond_failed", {"tool_use_id": tool_use_id}))
+
+    with client.stream(
+        "POST",
+        f"{URL}/sessions/{sid}/messages",
+        json={"prompt": prompt},
+        timeout=httpx.Timeout(connect=10.0, read=240.0, write=10.0, pool=10.0),
+    ) as resp:
+        if resp.status_code != 200:
+            raise RuntimeError(f"messages POST returned {resp.status_code}: {resp.text}")
+        chunk: list[str] = []
+        for raw in resp.iter_lines():
+            line = raw.rstrip("\r")
+            if line == "":
+                if chunk:
+                    parsed = _parse_sse_chunk("\n".join(chunk))
+                    if parsed is not None:
+                        events.append(parsed)
+                        ev_type, ev_data = parsed
+                        if ev_type == "interaction.requested":
+                            tool_use_id = ev_data.get("tool_use_id", "")
+                            questions = ev_data.get("questions", [])
+                            answers = []
+                            for q in questions:
+                                header = (q.get("header") or "").lower()
+                                # Q1 is "Target"; Q2 is "Source" (or absent for standalone)
+                                if "source" in header:
+                                    answers.append({"label": "N/A"})
+                                else:
+                                    answers.append({"label": "New .xlsx"})
+                            t = threading.Thread(
+                                target=_post_answer,
+                                args=(tool_use_id, answers),
+                                daemon=True,
+                            )
+                            t.start()
+                            answer_threads.append(t)
+                chunk = []
+            else:
+                chunk.append(line)
+        if chunk:
+            parsed = _parse_sse_chunk("\n".join(chunk))
+            if parsed is not None:
+                events.append(parsed)
+
+    for t in answer_threads:
+        t.join(timeout=5.0)
+
+    return events
 
 
 def _try_delete(client: httpx.Client, sid: str) -> None:
