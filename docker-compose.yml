@@ -12,11 +12,9 @@ services:
   backend:
     build:
       context: .
-      # Set to "1" to bundle LibreOffice for xlsx formula recalculation.
+      # "1" bundles LibreOffice + poppler/pandoc/fonts for docx/pptx/xlsx skills.
       args:
-        INSTALL_LIBREOFFICE: "0"
-    env_file:
-      - .env
+        INSTALL_LIBREOFFICE: "1"
     ports:
       - "8765:8765"
     volumes:

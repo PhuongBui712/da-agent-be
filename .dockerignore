@@ -19,4 +19,3 @@ demo/
 test-ui/
 .env
 .claude/settings.json
-.claude/settings.local.json
