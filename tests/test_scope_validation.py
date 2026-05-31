@@ -212,17 +212,24 @@ async def test_kb_scope_non_ready_returns_400(app, client, sid):
     )
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == (
-        f"kb {meta.id} is in status PENDING; only READY files can be scoped"
+        f"kb {meta.id} is in status PENDING; only READY/READY_PARTIAL files can be scoped"
     )
 
 
 # --------------------------------------------------------------------------- #
-# 5. Explicit READY kb → 200 and prompt carries the kb id + manifest path.
+# 5. Explicit READY kb → 200 and prompt carries the kb id + memory path.
 # --------------------------------------------------------------------------- #
 async def test_kb_scope_ready_kb_starts_turn(app, client, sid):
     state = app.state.app_state
     meta = await state.kb.create(filename="sales.xlsx", size_bytes=10)
-    await state.kb.update_status(meta.id, "READY")
+
+    # Write a memory file so _kb_entry resolves a non-None memory_path.
+    memory_dir = state.settings.kb_profiler_memory_dir
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    memory_file = memory_dir / f"{meta.id}.md"
+    memory_file.write_text("# sales notes", encoding="utf-8")
+
+    await state.kb.update_status(meta.id, "READY", memory_path=str(memory_file))
 
     original = _install_script([_result_message()])
     try:
@@ -240,7 +247,7 @@ async def test_kb_scope_ready_kb_starts_turn(app, client, sid):
     composed = fc.queries[0]
     assert meta.id in composed
     assert "sales.xlsx" in composed
-    assert "manifest at" in composed
+    assert "memory at" in composed
 
 
 # --------------------------------------------------------------------------- #
@@ -340,14 +347,14 @@ def test_render_scope_with_kb_entry():
             ScopeKbEntry(
                 kb_id="kb_xxx",
                 filename="file.xlsx",
-                manifest_path=Path("/tmp/kb/kb_xxx/manifest.json"),
-                manifest_size=42,
+                memory_path=Path("/tmp/kb/kb_xxx/memory.md"),
+                memory_size=128,
             )
         ]
     )
     out = render_scope(block, "go")
     assert "For this turn, only these KB files are in scope:" in out
-    assert "- kb_xxx (file.xlsx) — manifest at /tmp/kb/kb_xxx/manifest.json" in out
+    assert "- kb_xxx (file.xlsx) — memory at /tmp/kb/kb_xxx/memory.md" in out
 
 
 def test_render_scope_with_attachment_entry():
@@ -366,14 +373,14 @@ def test_render_scope_with_attachment_entry():
 
 
 # --------------------------------------------------------------------------- #
-# 10. Default-all with mixed READY / PROCESSING — only READY ends up in scope.
+# 10. Default-all with mixed READY / PROFILING — only READY ends up in scope.
 # --------------------------------------------------------------------------- #
 async def test_default_all_kbs_only_ready_in_block(app, client, sid):
     state = app.state.app_state
     ready = await state.kb.create(filename="ready.xlsx", size_bytes=10)
     await state.kb.update_status(ready.id, "READY")
-    processing = await state.kb.create(filename="proc.xlsx", size_bytes=10)
-    await state.kb.update_status(processing.id, "PROCESSING")
+    profiling = await state.kb.create(filename="profiling.xlsx", size_bytes=10)
+    await state.kb.update_status(profiling.id, "PROFILING")
 
     original = _install_script([_result_message()])
     try:
@@ -388,4 +395,57 @@ async def test_default_all_kbs_only_ready_in_block(app, client, sid):
     fc = FakeClient.instances[-1]
     composed = fc.queries[0]
     assert ready.id in composed
-    assert processing.id not in composed
+    assert profiling.id not in composed
+
+
+# --------------------------------------------------------------------------- #
+# 11. READY_PARTIAL is scopable and renders with the legacy fallback line.
+# --------------------------------------------------------------------------- #
+async def test_kb_scope_ready_partial_is_scopable(app, client, sid):
+    state = app.state.app_state
+    meta = await state.kb.create(filename="partial.xlsx", size_bytes=10)
+    await state.kb.update_status(meta.id, "READY_PARTIAL")
+
+    original = _install_script([_result_message()])
+    try:
+        async with client.stream(
+            "POST",
+            f"/sessions/{sid}/messages",
+            json={"prompt": "go", "kb_scope": [meta.id]},
+        ) as resp:
+            assert resp.status_code == 200
+            await _drain(resp)
+    finally:
+        _restore_init(original)
+
+    fc = FakeClient.instances[-1]
+    composed = fc.queries[0]
+    assert meta.id in composed
+    assert "NO MEMORY" in composed
+
+
+# --------------------------------------------------------------------------- #
+# 12. READY kb with no memory file on disk → legacy fallback line in prompt.
+# --------------------------------------------------------------------------- #
+async def test_ready_kb_with_no_memory_file_renders_legacy_fallback(app, client, sid):
+    state = app.state.app_state
+    meta = await state.kb.create(filename="legacy.xlsx", size_bytes=10)
+    # Mark READY but deliberately leave no memory file on disk.
+    await state.kb.update_status(meta.id, "READY")
+
+    original = _install_script([_result_message()])
+    try:
+        async with client.stream(
+            "POST",
+            f"/sessions/{sid}/messages",
+            json={"prompt": "go", "kb_scope": [meta.id]},
+        ) as resp:
+            assert resp.status_code == 200
+            await _drain(resp)
+    finally:
+        _restore_init(original)
+
+    fc = FakeClient.instances[-1]
+    composed = fc.queries[0]
+    assert meta.id in composed
+    assert "NO MEMORY (legacy; inspect raw.xlsx via xlsx skill)" in composed
