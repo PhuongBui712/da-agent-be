@@ -3,17 +3,29 @@
 The main agent dispatches these via the `Task` tool during a complex investigation.
 Defining them programmatically (AgentDefinition) keeps orchestration in code while the
 prompts stay editable.
+
+The `kb_profiler` subagent is intentionally NOT included here. It is invoked
+only by the BE ingestion pipeline (see `da_agent.ingestion.profiler`) under
+its own `ClaudeAgentOptions` so the in-session model never accidentally
+delegates to opus during analysis turns. Per the project mandate: ingest
+uses opus; in-session analysis stays on sonnet.
 """
 
 from __future__ import annotations
 
 from claude_agent_sdk import AgentDefinition
 
+from ..config import Settings
+
 _READONLY = ["Read", "Bash", "Glob", "Grep"]
 _READWRITE = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
 
 
-def build_subagents() -> dict[str, AgentDefinition]:
+def build_subagents(settings: Settings | None = None) -> dict[str, AgentDefinition]:
+    # `settings` is accepted for forward-compat (the kb_profiler factory takes
+    # one) but is unused by the in-session subagents below — they inherit the
+    # main agent's model.
+    del settings
     return {
         "profiler": AgentDefinition(
             description="Profiles spreadsheets: schema, table regions, data quality, "

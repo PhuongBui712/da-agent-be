@@ -43,3 +43,18 @@ def test_reporter_prompt_routes_by_extension() -> None:
     assert ".xlsx" in reporter.prompt
     assert ".pptx" in reporter.prompt
     assert ".docx" in reporter.prompt
+
+
+def test_build_subagents_accepts_optional_settings() -> None:
+    from da_agent.config import Settings
+
+    without = set(build_subagents().keys())
+    with_settings = set(build_subagents(Settings()).keys())
+    assert without == with_settings == {"profiler", "analyst", "reporter"}
+
+
+def test_kb_profiler_NOT_in_main_subagents() -> None:
+    from da_agent.config import Settings
+
+    agents = build_subagents(Settings())
+    assert "kb_profiler" not in agents
