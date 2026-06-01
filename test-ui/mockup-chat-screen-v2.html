@@ -1,0 +1,1383 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>da-agent — Mockup Chat v2 (thinking pulse · xlsx-only · subagent panel)</title>
+
+  <!-- Tailwind v3 Play CDN — same as v1 mockup, no build step. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Inter / JetBrains Mono / Space Grotesk — match the real FE @theme block. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Lucide UMD — same icon set as the real FE. -->
+  <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              black: "#0d0f12",
+              "dark-gray": "#1a1e24",
+              border: "#e2e8f0",
+              accent: "#3b82f6",
+              teal: "#0d9488",
+              purple: "#7c3aed",
+            },
+          },
+          fontFamily: {
+            sans: ['"Inter"', "ui-sans-serif", "system-ui", "sans-serif"],
+            mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+            display: ['"Space Grotesk"', "sans-serif"],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    html, body { height: 100%; }
+    body {
+      background: #f8fafc;
+      color: #1e293b;
+      font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.3); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.5); }
+
+    @keyframes fade-in   { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes slide-in  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in  { animation: fade-in 200ms ease-out; }
+    .animate-slide-in { animation: slide-in 220ms ease-out; }
+
+    /* ----- New in v2 -------------------------------------------------- */
+
+    /* Soft pulse used for the streaming "Thinking" word.
+       Goes invisible→visible→invisible on a slow loop, no scaling. */
+    @keyframes thinking-fade {
+      0%, 100% { opacity: 0.35; }
+      50%      { opacity: 1; }
+    }
+    .thinking-pulse { animation: thinking-fade 1.4s ease-in-out infinite; }
+
+    /* Thinking toggle — only appears when the user hovers over the
+       thinking row; clicking it flips body hidden + swaps the chevron. */
+    [data-thinking] .thinking-toggle {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 120ms ease;
+    }
+    [data-thinking]:hover .thinking-toggle,
+    [data-thinking]:focus-within .thinking-toggle,
+    [data-thinking].is-expanded .thinking-toggle {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* Subagent card chip pulse — light/dark accent flicker for "running". */
+    @keyframes subagent-blink {
+      0%, 100% { background-color: rgba(56, 189, 248, 0.20); }
+      50%      { background-color: rgba(56, 189, 248, 0.55); }
+    }
+    .subagent-running-dot { animation: subagent-blink 1.6s ease-in-out infinite; }
+
+    /* Attachment chip — reveal the X on hover only. */
+    .att-chip { position: relative; }
+    .att-chip .att-remove {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 120ms ease;
+    }
+    .att-chip:hover .att-remove,
+    .att-chip:focus-within .att-remove {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    /* Once locked (a turn has run since upload) the chip becomes non-removable. */
+    .att-chip.is-locked .att-remove { display: none; }
+
+    /* Markdown helpers (carry-over from v1). */
+    .md-table { border-collapse: collapse; }
+    .md-table th, .md-table td { border: 1px solid #e2e8f0; }
+  </style>
+</head>
+
+<body class="overflow-hidden">
+
+  <!-- =====================================================================
+       Outer 3-pane shell — mirrors src/App.tsx layout from da-agent-fe.
+       ===================================================================== -->
+  <div class="flex h-screen w-screen overflow-hidden bg-slate-50">
+
+    <!-- ===== Sidebar ===== -->
+    <aside class="w-64 bg-white border-r border-slate-200 h-screen shrink-0 flex flex-col">
+      <div class="p-5 border-b border-slate-100 flex items-center gap-3">
+        <div class="h-9 w-9 bg-slate-900 rounded-lg flex items-center justify-center">
+          <i data-lucide="brain" class="h-5 w-5 text-slate-100"></i>
+        </div>
+        <div>
+          <div class="font-semibold text-slate-800 tracking-tight text-sm">da-agent</div>
+          <div class="text-xs text-slate-500 font-medium">Excel data analyst</div>
+        </div>
+      </div>
+
+      <div class="p-4">
+        <button class="w-full bg-[#0d0f12] hover:bg-slate-800 text-white font-medium text-sm py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors">
+          <i data-lucide="plus" class="h-4 w-4"></i>
+          New session
+        </button>
+      </div>
+
+      <nav class="px-3 space-y-1">
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 text-slate-900 text-sm font-medium">
+          <i data-lucide="message-square" class="h-4 w-4"></i> Chat
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="database" class="h-4 w-4"></i> Knowledge
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="file-code" class="h-4 w-4"></i> Outputs
+        </a>
+        <a class="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-50 text-sm font-medium">
+          <i data-lucide="settings" class="h-4 w-4"></i> Settings
+        </a>
+      </nav>
+
+      <div class="px-4 mt-6">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 px-1">Sessions</div>
+        <div class="space-y-0.5">
+          <div class="bg-slate-50 text-slate-950 font-semibold border-l-2 border-slate-900 pl-2.5 py-1.5 text-xs truncate">
+            Mockup chat v2
+          </div>
+          <div class="text-slate-500 hover:text-slate-900 hover:bg-slate-50 px-2.5 py-1.5 text-xs truncate">
+            Sales Q1 analysis
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-auto p-4 border-t border-slate-100 text-[10px] text-slate-400 font-mono">
+        sess_v2_mockup_demo
+      </div>
+    </aside>
+
+    <!-- ===== Chat workspace ===== -->
+    <section class="flex-1 flex flex-col h-full bg-[#f8fafc] border-r border-slate-200 min-w-0">
+
+      <header class="h-16 border-b border-slate-200 bg-white px-6 flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-3 min-w-0">
+          <span id="conn-dot" class="h-2 w-2 rounded-full bg-amber-500 animate-pulse" title="connecting"></span>
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-800 text-sm tracking-tight truncate">Mockup chat v2 — subagent panel</div>
+            <div class="text-[11px] text-slate-500 font-medium font-mono truncate">sess_v2_mockup_demo · model: claude-sonnet-4-6</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="stream-status" class="text-[11px] text-slate-500 font-medium">idle</span>
+          <button id="replay-btn"
+                  class="px-3 py-1.5 text-xs font-bold rounded-lg bg-[#0d0f12] hover:bg-slate-800 text-white flex items-center gap-1.5 transition-colors">
+            <i data-lucide="rotate-ccw" class="h-3.5 w-3.5"></i>
+            Replay stream
+          </button>
+        </div>
+      </header>
+
+      <div id="feed" class="flex-1 overflow-y-auto px-8 py-6 space-y-6">
+        <!-- empty until JS pushes events -->
+      </div>
+
+      <!-- ===== Composer ===== -->
+      <div class="px-8 py-5 bg-white border-t border-slate-200 space-y-3">
+
+        <!-- Attachment section: REPLACES the prior single "+" upload button.
+             Empty state shows a dashed dropzone w/ + button.
+             Filled state shows chips + a small + button to add more. -->
+        <div id="attach-section" class="rounded-xl border border-dashed border-slate-300 bg-slate-50/40 px-3 py-2.5 flex items-center gap-2 flex-wrap min-h-[44px]">
+          <button id="attach-add-btn"
+                  class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:border-slate-400 text-slate-600 hover:text-slate-900 text-xs font-semibold transition-colors shadow-xs">
+            <i data-lucide="plus" class="h-3.5 w-3.5"></i>
+            <span id="attach-cta">Attach .xlsx</span>
+          </button>
+          <span id="attach-empty-hint" class="text-[11px] text-slate-400 font-medium">
+            Excel files only · max 100MB · click + or drop file
+          </span>
+          <div id="attach-list" class="contents"></div>
+          <input id="attach-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden multiple />
+        </div>
+
+        <!-- Composer textbox -->
+        <div class="border border-slate-300 hover:border-slate-400 focus-within:ring-1 focus-within:ring-slate-400 bg-white rounded-2xl px-4 py-3 flex items-end gap-3 shadow-xs">
+          <textarea id="composer-text"
+            class="flex-1 resize-none bg-transparent outline-none text-[13px] text-slate-800 placeholder-slate-400 font-medium"
+            rows="2"
+            placeholder="(mockup) gõ một prompt — replay bằng nút trên header"
+            disabled></textarea>
+          <button class="bg-[#0d0f12] text-white hover:bg-slate-800 transition-colors h-9 w-9 rounded-lg flex items-center justify-center shrink-0 shadow-xs"
+                  disabled>
+            <i data-lucide="send" class="h-4 w-4"></i>
+          </button>
+        </div>
+
+        <!-- Composer footer: scope summary + key hints -->
+        <div class="flex items-center justify-between">
+          <div id="scope-summary" class="text-[11px] text-slate-400 font-medium">
+            Data scope: <span class="font-mono text-slate-500">no KB files in scope</span>
+          </div>
+          <div class="text-[11px] text-slate-400 font-medium">
+            Enter to send · Shift+Enter newline
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ===== Right analytics panel ===== -->
+    <aside class="w-80 bg-white border-l border-slate-200 shrink-0 p-6 space-y-6 overflow-y-auto">
+
+      <!-- ===== Data scope card =====
+           v2 change: KB scope is REQUIRED. Empty selection => "no KB files in scope"
+           and the prompt runs with no manifest at all (no more default-all). -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Data scope</div>
+          <span id="scope-required-pill" class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">REQUIRED</span>
+        </div>
+        <div id="scope-card" class="rounded-xl border border-slate-200 bg-white p-3 space-y-2 text-xs">
+          <!-- KB rows are populated by JS from MOCKUP_KB. -->
+        </div>
+      </div>
+
+      <!-- ===== Subagent progress card =====
+           NEW in v2: when the main agent calls the `Agent` tool (depth=0),
+           a subagent panel mounts here. Each subagent shows ONLY its
+           latest tool — not the full message stream — to keep the
+           sidebar dense and scannable. -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Subagents</div>
+          <span id="subagent-count" class="text-[10px] font-mono font-bold text-slate-500">0</span>
+        </div>
+        <div id="subagent-list" class="space-y-2">
+          <div id="subagent-empty" class="rounded-xl border border-slate-200 bg-slate-50/40 p-3 text-[11px] text-slate-500 font-medium">
+            (no subagents spawned yet)
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== Todos card =====
+           v2 change: numbered (1, 2, 3 …) + status icons per the user's
+           reference image — pending shows the number badge, completed
+           shows a check + strike-through, in-progress shows a spinner.  -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Progress</div>
+          <i data-lucide="chevron-down" class="h-3.5 w-3.5 text-slate-400"></i>
+        </div>
+        <div id="todos-card" class="rounded-xl border border-slate-200 bg-white p-3 text-xs">
+          <div id="todos-empty" class="text-slate-500 font-medium">(empty — turn produced no todos)</div>
+          <ol id="todos-list" class="space-y-2 hidden"></ol>
+        </div>
+      </div>
+
+      <div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Result</div>
+        <div id="result-card" class="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500 font-medium">
+          (waiting…)
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- =====================================================================
+       Mockup data + replay engine + render functions.
+       ===================================================================== -->
+  <script>
+  (function () {
+    "use strict";
+
+    /* ----------------------------------------------------------------- *
+     *  KB seed — driven into the right-panel scope card.
+     *  v2: scope is REQUIRED; user must tick at least one to include
+     *  any KB context. No ticks → no KB files.
+     * ----------------------------------------------------------------- */
+    var MOCKUP_KB = [
+      { kb_id: "kb_uob_finrev", filename: "240826-UOB_Financial_Review.xlsx", status: "READY", ticked: false },
+      { kb_id: "kb_sales_q1",   filename: "Sales_Q1_2024.xlsx",                status: "READY", ticked: false },
+      { kb_id: "kb_pending_a",  filename: "DRAFT_invoices.xlsx",               status: "PROCESSING", ticked: false },
+    ];
+
+    /* ----------------------------------------------------------------- *
+     *  Mockup SSE payload — order required by the spec:
+     *  user.prompt → thinking (delta+end) → text → tool chain
+     *  (with one Agent spawn that pushes 2 subagent steps) → todos →
+     *  result. The Agent-tool spawn is what triggers the right-sidebar
+     *  subagent panel — NOT the main feed.
+     * ----------------------------------------------------------------- */
+    var MOCKUP_EVENTS = [
+      { type: "user.prompt",
+        text: "Phân tích doanh thu của UOB FY2023 — chia 2 nhánh đọc song song bằng subagents." },
+
+      // streamed thinking — we only show "Thinking" word, not the body
+      { type: "assistant.thinking.delta", text: "Cần dùng kb_profiler memory note + raw schema. Mỗi nhánh giao cho 1 subagent." },
+      { type: "assistant.thinking.delta", text: " Nhánh 1: Explore subagent đọc memory note." },
+      { type: "assistant.thinking.delta", text: " Nhánh 2: general-purpose subagent kiểm tra raw.xlsx." },
+      { type: "assistant.thinking.end" },
+
+      { type: "todos.snapshot", items: [
+        { id: 1, text: "Đọc memory note KB UOB",       status: "in_progress" },
+        { id: 2, text: "Kiểm tra raw schema raw.xlsx", status: "pending"     },
+        { id: 3, text: "Tổng hợp Net Profit + Total Assets trend", status: "pending" },
+        { id: 4, text: "Soạn báo cáo summary",         status: "pending" },
+        { id: 5, text: "Ghi output xlsx vào outputs/", status: "pending" },
+      ]},
+
+      // Subagent A — Agent tool spawned at depth=0
+      { type: "tool.use",    tool_use_id: "toolu_subA",   name: "Agent",
+        input: { description: "Subagent A — đọc memory note KB UOB",
+                 prompt: "Đọc /data/agent-memory/kb_profiler/kb_uob_finrev.md, trích sheets, time_range, key_columns.",
+                 subagent_type: "Explore" }, depth: 0 },
+      // Subagent A's nested tool calls — depth>=1 → routed to subagent card, NOT feed.
+      // We feed THREE nested steps so the rolling 2-step window has something to roll.
+      { type: "tool.use",    tool_use_id: "toolu_subA_g1", name: "Glob",
+        input: { pattern: "*.md", path: "/data/agent-memory/kb_profiler",
+                 description: "Liệt kê memory notes của kb_profiler" },
+        depth: 1, parent_tool_use_id: "toolu_subA" },
+      { type: "tool.result", tool_use_id: "toolu_subA_g1",
+        summary: "1 file: kb_uob_finrev.md",
+        is_error: false, depth: 1, parent_tool_use_id: "toolu_subA" },
+      { type: "tool.use",    tool_use_id: "toolu_subA_r1", name: "Read",
+        input: { file_path: "/data/agent-memory/kb_profiler/kb_uob_finrev.md",
+                 description: "Đọc memory note KB UOB" },
+        depth: 1, parent_tool_use_id: "toolu_subA" },
+      { type: "tool.result", tool_use_id: "toolu_subA_r1",
+        summary: "412 lines. Memory note covers 9 sheets (Cover, P&L, BS, CF, Notes 1-5). Time range FY2018-FY2023.",
+        is_error: false, depth: 1, parent_tool_use_id: "toolu_subA" },
+      { type: "tool.use",    tool_use_id: "toolu_subA_x1", name: "Grep",
+        input: { pattern: "Net Profit|Total Assets", path: "/data/agent-memory/kb_profiler/kb_uob_finrev.md",
+                 description: "Tìm khoá NPAT/Total Assets trong memory note" },
+        depth: 1, parent_tool_use_id: "toolu_subA" },
+      { type: "tool.result", tool_use_id: "toolu_subA_x1",
+        summary: "8 matches across the note — section §Key columns covers the trend rows.",
+        is_error: false, depth: 1, parent_tool_use_id: "toolu_subA" },
+      { type: "tool.result", tool_use_id: "toolu_subA",
+        summary: "{sheets_found: [...], time_range: 'FY2018-FY2023', key_columns: ['Period','NPAT','TotalAssets']}",
+        is_error: false, depth: 0 },
+
+      // Subagent B — second Agent tool spawn at depth=0
+      { type: "tool.use",    tool_use_id: "toolu_subB",   name: "Agent",
+        input: { description: "Subagent B — kiểm tra schema raw.xlsx",
+                 prompt: "Inspect raw.xlsx: list sheets + columns of first 3 sheets.",
+                 subagent_type: "general-purpose" }, depth: 0 },
+      { type: "tool.use",    tool_use_id: "toolu_subB_b1", name: "Bash",
+        input: { command: "python3 -c \"import pandas as pd; print(pd.ExcelFile('/data/kb/raw.xlsx').sheet_names)\"",
+                 description: "Liệt kê sheet names của raw.xlsx" },
+        depth: 1, parent_tool_use_id: "toolu_subB" },
+      { type: "tool.result", tool_use_id: "toolu_subB_b1",
+        summary: "['1 Cover','2 P&L','3 BS','4 CF','5 Notes - Loans','6 Notes - Deposits']",
+        is_error: false, depth: 1, parent_tool_use_id: "toolu_subB" },
+      { type: "tool.use",    tool_use_id: "toolu_subB_b2", name: "Bash",
+        input: { command: "python3 -c \"import pandas as pd; print(pd.ExcelFile('/data/kb/raw.xlsx').parse('2 P&L', nrows=3).columns.tolist())\"",
+                 description: "Inspect cột của sheet 2 P&L" },
+        depth: 1, parent_tool_use_id: "toolu_subB" },
+      { type: "tool.result", tool_use_id: "toolu_subB_b2",
+        summary: "['Section', 'Item', 'FY2018', 'FY2019', ..., 'FY2023']",
+        is_error: false, depth: 1, parent_tool_use_id: "toolu_subB" },
+      { type: "tool.use",    tool_use_id: "toolu_subB_b3", name: "Bash",
+        input: { command: "python3 -c \"import pandas as pd; df = pd.ExcelFile('/data/kb/raw.xlsx').parse('3 BS'); print(df.shape)\"",
+                 description: "Đo shape của sheet 3 BS" },
+        depth: 1, parent_tool_use_id: "toolu_subB" },
+      { type: "tool.result", tool_use_id: "toolu_subB_b3",
+        summary: "(58, 11)",
+        is_error: false, depth: 1, parent_tool_use_id: "toolu_subB" },
+      { type: "tool.result", tool_use_id: "toolu_subB",
+        summary: "{sheet_names:[...], sample_columns_per_sheet:{...}, notable_observation:'Multi-row header.'}",
+        is_error: false, depth: 0 },
+
+      // Main-agent tool steps — these stay in the feed (depth=0 + non-Agent tools)
+      { type: "tool.use",    tool_use_id: "toolu_main_b", name: "Bash",
+        input: { command: "python3 -c 'import pandas as pd; ...'", description: "Extract NPAT trend" }, depth: 0 },
+      { type: "tool.result", tool_use_id: "toolu_main_b",
+        summary: "Net Profit After Tax (S$m): FY2021=4030, FY2022=4573, FY2023=5710. YoY +24.9%.",
+        is_error: false, depth: 0 },
+
+      { type: "todos.snapshot", items: [
+        { id: 1, text: "Đọc memory note KB UOB",       status: "completed" },
+        { id: 2, text: "Kiểm tra raw schema raw.xlsx", status: "completed" },
+        { id: 3, text: "Tổng hợp Net Profit + Total Assets trend", status: "in_progress" },
+        { id: 4, text: "Soạn báo cáo summary",         status: "pending" },
+        { id: 5, text: "Ghi output xlsx vào outputs/", status: "pending" },
+      ]},
+
+      // Final assistant text — markdown body, same renderer as v1
+      { type: "assistant.text", text:
+        "# UOB Financial Review FY2023 — tóm tắt\n\n" +
+        "Hai subagent đã hoàn thành nhánh đọc song song. Kết luận chính dưới đây.\n\n" +
+        "## Bảng Net Profit After Tax (S$m)\n\n" +
+        "| Năm | NPAT | YoY |\n" +
+        "|---|---|---|\n" +
+        "| FY2021 | **4,030** | — |\n" +
+        "| FY2022 | **4,573** | +13.5% |\n" +
+        "| FY2023 | **5,710** | +24.9% |\n\n" +
+        "> Tăng trưởng FY2023 vượt trội nhờ NIM mở rộng và chi phí tín dụng giảm." },
+
+      // Final snapshot mirrors the user's reference image — mixed state with
+      // completed (line-through), in-progress (highlighted), and pending
+      // (numbered) all visible at once. This is the moment the result card
+      // "freezes" so it's the most informative visual.
+      { type: "todos.snapshot", items: [
+        { id: 1, text: "Đọc memory note KB UOB",       status: "completed" },
+        { id: 2, text: "Kiểm tra raw schema raw.xlsx", status: "completed" },
+        { id: 3, text: "Tổng hợp Net Profit + Total Assets trend", status: "completed" },
+        { id: 4, text: "Soạn báo cáo summary",         status: "in_progress" },
+        { id: 5, text: "Ghi output xlsx vào outputs/", status: "pending" },
+      ]},
+
+      { type: "result", turns: 1, cost_usd: 0.214, duration_s: 22.7 },
+    ];
+
+    /* ----------------------------------------------------------------- *
+     *  Lucide icon refresh helper.
+     * ----------------------------------------------------------------- */
+    function refreshIcons() {
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons();
+      }
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  Tiny markdown renderer (subset matching v1).
+     * ----------------------------------------------------------------- */
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"]/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+      });
+    }
+    function renderInline(s) {
+      s = escapeHtml(s);
+      s = s.replace(/`([^`]+)`/g,
+        '<code class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-800 font-mono text-[11px] border border-slate-200">$1</code>');
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-slate-950">$1</strong>');
+      s = s.replace(/\*([^*]+)\*/g, '<em class="italic">$1</em>');
+      return s;
+    }
+    function renderMarkdown(md) {
+      var lines = md.split("\n");
+      var html = "";
+      var i = 0;
+      while (i < lines.length) {
+        var line = lines[i];
+
+        // table
+        if (/^\|/.test(line) && i + 1 < lines.length && /^\|\s*[-: |]+\|\s*$/.test(lines[i + 1])) {
+          var head = line.split("|").slice(1, -1).map(function (c) { return c.trim(); });
+          i += 2;
+          var rows = [];
+          while (i < lines.length && /^\|/.test(lines[i])) {
+            rows.push(lines[i].split("|").slice(1, -1).map(function (c) { return c.trim(); }));
+            i++;
+          }
+          html +=
+            '<div class="w-full overflow-x-auto my-3 border border-slate-200 rounded-xl bg-white shadow-xs"><table class="md-table w-full text-xs">' +
+              '<thead class="bg-slate-50 border-b border-slate-200"><tr>' +
+                head.map(function (c) {
+                  return '<th class="px-4 py-2.5 font-semibold text-[11px] uppercase tracking-wider text-slate-500 text-left">' + renderInline(c) + '</th>';
+                }).join("") +
+              '</tr></thead>' +
+              '<tbody>' +
+                rows.map(function (r) {
+                  return '<tr class="hover:bg-slate-50/40">' + r.map(function (c) {
+                    return '<td class="px-4 py-2 text-slate-600 font-medium align-top">' + renderInline(c) + '</td>';
+                  }).join("") + '</tr>';
+                }).join("") +
+              '</tbody>' +
+            '</table></div>';
+          continue;
+        }
+
+        var h2 = line.match(/^##\s+(.*)$/);
+        if (h2) {
+          html += '<h2 class="text-[15px] font-bold text-slate-900 mt-4 mb-2 tracking-tight">' + renderInline(h2[1]) + '</h2>';
+          i++; continue;
+        }
+        var h1 = line.match(/^#\s+(.*)$/);
+        if (h1) {
+          html += '<h1 class="text-lg font-bold text-slate-900 mt-3 mb-3 tracking-tight font-display">' + renderInline(h1[1]) + '</h1>';
+          i++; continue;
+        }
+
+        if (/^>\s?/.test(line)) {
+          var quote = [];
+          while (i < lines.length && /^>\s?/.test(lines[i])) {
+            quote.push(lines[i].replace(/^>\s?/, ""));
+            i++;
+          }
+          html += '<blockquote class="border-l-2 border-slate-300 pl-3 py-1 my-3 text-xs text-slate-600 font-medium italic">' +
+                  renderInline(quote.join(" ")) + '</blockquote>';
+          continue;
+        }
+
+        if (/^\s*$/.test(line)) { i++; continue; }
+
+        var paraBuf = [line];
+        i++;
+        while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^[#>|`-]/.test(lines[i])) {
+          paraBuf.push(lines[i]);
+          i++;
+        }
+        html += '<p class="text-slate-600 text-xs md:text-sm font-medium leading-relaxed">' +
+                renderInline(paraBuf.join(" ")) + '</p>';
+      }
+      return html;
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  DOM refs.
+     * ----------------------------------------------------------------- */
+    var feed              = document.getElementById("feed");
+    var statusEl          = document.getElementById("stream-status");
+    var connDot           = document.getElementById("conn-dot");
+    var resultCard        = document.getElementById("result-card");
+    var scopeCard         = document.getElementById("scope-card");
+    var scopeSummary      = document.getElementById("scope-summary");
+    var subagentList      = document.getElementById("subagent-list");
+    var subagentEmpty     = document.getElementById("subagent-empty");
+    var subagentCountEl   = document.getElementById("subagent-count");
+    var todosList         = document.getElementById("todos-list");
+    var todosEmpty        = document.getElementById("todos-empty");
+    var attachSection     = document.getElementById("attach-section");
+    var attachAddBtn      = document.getElementById("attach-add-btn");
+    var attachInput       = document.getElementById("attach-input");
+    var attachList        = document.getElementById("attach-list");
+    var attachEmptyHint   = document.getElementById("attach-empty-hint");
+    var attachCta         = document.getElementById("attach-cta");
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      var dotClass = "h-2 w-2 rounded-full ";
+      if (kind === "open")       dotClass += "bg-emerald-500";
+      else if (kind === "live")  dotClass += "bg-emerald-500 animate-pulse";
+      else if (kind === "error") dotClass += "bg-rose-500";
+      else                       dotClass += "bg-amber-500 animate-pulse";
+      connDot.className = dotClass;
+    }
+
+    function appendNode(html) {
+      var div = document.createElement("div");
+      div.className = "animate-slide-in";
+      div.innerHTML = html;
+      feed.appendChild(div);
+      refreshIcons();
+      feed.scrollTop = feed.scrollHeight;
+      return div;
+    }
+
+    function stripScopeWrap(text) {
+      var m = text.match(/<user_prompt>\s*([\s\S]*?)\s*<\/user_prompt>/);
+      return m ? m[1] : text;
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  ATTACHMENTS — v2 model.
+     *
+     *  - Empty state: dropzone with [+ Attach .xlsx] CTA + hint text.
+     *  - Filled state: chips replace the hint; the [+] stays so user
+     *    can add more.
+     *  - Hover on a chip → an X button slides in.
+     *  - Once a turn has run since upload, the X is hidden (chips
+     *    become locked). attachState.locked is flipped by replay engine.
+     * ----------------------------------------------------------------- */
+    var attachState = {
+      files: [],   // {id, name, size, lockedAtTurn}
+      locked: false,
+    };
+    var nextAttachId = 1;
+
+    function fmtSize(b) {
+      if (b == null) return "";
+      if (b < 1024) return b + "B";
+      if (b < 1024 * 1024) return (b / 1024).toFixed(1) + "KB";
+      return (b / 1024 / 1024).toFixed(1) + "MB";
+    }
+
+    function isXlsx(file) {
+      var n = (file.name || "").toLowerCase();
+      return n.endsWith(".xlsx");
+    }
+
+    function lockAttachments() {
+      attachState.locked = true;
+      renderAttachments();
+    }
+
+    function renderAttachments() {
+      // wipe and rebuild — small list, simpler than diffing
+      attachList.innerHTML = "";
+
+      if (attachState.files.length === 0) {
+        attachEmptyHint.classList.remove("hidden");
+        attachCta.textContent = "Attach .xlsx";
+        return;
+      }
+
+      attachEmptyHint.classList.add("hidden");
+      attachCta.textContent = "Add more";
+
+      attachState.files.forEach(function (f) {
+        var chip = document.createElement("span");
+        var lockedCls = attachState.locked ? " is-locked" : "";
+        chip.className = "att-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold" + lockedCls;
+        chip.setAttribute("data-att-id", String(f.id));
+        chip.innerHTML =
+          '<i data-lucide="file-spreadsheet" class="h-3.5 w-3.5"></i>' +
+          '<span class="truncate max-w-[160px]">' + escapeHtml(f.name) + '</span>' +
+          '<span class="text-[10px] font-mono text-emerald-700/70">' + fmtSize(f.size) + '</span>' +
+          (attachState.locked
+            ? ''
+            : '<button class="att-remove ml-0.5 h-4 w-4 inline-flex items-center justify-center rounded text-emerald-700 hover:bg-emerald-200/70" aria-label="Remove">' +
+                '<i data-lucide="x" class="h-3 w-3"></i>' +
+              '</button>');
+        attachList.appendChild(chip);
+
+        var removeBtn = chip.querySelector(".att-remove");
+        if (removeBtn) {
+          removeBtn.addEventListener("click", function () {
+            attachState.files = attachState.files.filter(function (x) { return x.id !== f.id; });
+            renderAttachments();
+          });
+        }
+      });
+
+      refreshIcons();
+    }
+
+    function addAttachment(file) {
+      if (!isXlsx(file)) {
+        attachEmptyHint.textContent = "Only .xlsx files are allowed.";
+        attachEmptyHint.classList.remove("text-slate-400");
+        attachEmptyHint.classList.add("text-rose-600");
+        return;
+      }
+      attachState.files.push({
+        id: nextAttachId++,
+        name: file.name,
+        size: file.size,
+      });
+      attachEmptyHint.textContent = "Excel files only · max 100MB · click + or drop file";
+      attachEmptyHint.classList.remove("text-rose-600");
+      attachEmptyHint.classList.add("text-slate-400");
+      renderAttachments();
+    }
+
+    attachAddBtn.addEventListener("click", function () { attachInput.click(); });
+    attachInput.addEventListener("change", function (e) {
+      var files = Array.from(e.target.files || []);
+      files.forEach(addAttachment);
+      attachInput.value = "";
+    });
+
+    // Drag-drop into the section
+    ["dragover", "dragenter"].forEach(function (k) {
+      attachSection.addEventListener(k, function (e) {
+        e.preventDefault();
+        attachSection.classList.add("border-slate-500", "bg-slate-50");
+      });
+    });
+    ["dragleave", "drop"].forEach(function (k) {
+      attachSection.addEventListener(k, function (e) {
+        e.preventDefault();
+        attachSection.classList.remove("border-slate-500", "bg-slate-50");
+      });
+    });
+    attachSection.addEventListener("drop", function (e) {
+      var files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+      files.forEach(addAttachment);
+    });
+
+    // Seed one attachment so the screen demonstrates the filled state.
+    addAttachment({ name: "240826-UOB_Financial_Review.xlsx", size: 240 * 1024 });
+
+    /* ----------------------------------------------------------------- *
+     *  KB SCOPE — required selection.
+     *  v2: 0 ticks ⇒ no KB included (NOT default-all).
+     * ----------------------------------------------------------------- */
+    function renderScopeCard() {
+      scopeCard.innerHTML = "";
+      MOCKUP_KB.forEach(function (kb) {
+        var disabled = kb.status !== "READY";
+        var row = document.createElement("label");
+        row.className = "flex items-center gap-2 cursor-pointer select-none" +
+          (disabled ? " opacity-50 cursor-not-allowed" : "");
+        row.innerHTML =
+          '<input type="checkbox" class="rounded border-slate-300" ' +
+          (disabled ? "disabled" : "") +
+          (kb.ticked && !disabled ? " checked" : "") +
+          ' data-kb-id="' + kb.kb_id + '" />' +
+          '<i data-lucide="file-spreadsheet" class="h-3.5 w-3.5 text-slate-500"></i>' +
+          '<span class="truncate text-slate-700 font-semibold">' + escapeHtml(kb.filename) + '</span>' +
+          '<span class="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded ' +
+            (kb.status === "READY"
+              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+              : "bg-amber-50 text-amber-700 border border-amber-200") +
+          '">' + kb.status + '</span>';
+        scopeCard.appendChild(row);
+        var cb = row.querySelector("input");
+        cb.addEventListener("change", function () {
+          kb.ticked = cb.checked;
+          updateScopeSummary();
+        });
+      });
+
+      // Footer hint — emphasises that scope is REQUIRED.
+      var hint = document.createElement("div");
+      hint.className = "pt-2 mt-1 border-t border-slate-100 text-[10px] text-slate-400 font-medium leading-relaxed";
+      hint.innerHTML = "Tick at least one to include KB context. <span class=\"font-semibold text-slate-500\">No ticks = no KB files.</span>";
+      scopeCard.appendChild(hint);
+
+      refreshIcons();
+      updateScopeSummary();
+    }
+
+    function updateScopeSummary() {
+      var ticked = MOCKUP_KB.filter(function (k) { return k.ticked && k.status === "READY"; });
+      if (ticked.length === 0) {
+        scopeSummary.innerHTML = 'Data scope: <span class="font-mono text-slate-500">no KB files in scope</span>';
+      } else {
+        scopeSummary.innerHTML = 'Data scope: <span class="font-mono text-slate-700 font-semibold">' +
+          ticked.length + ' file' + (ticked.length === 1 ? "" : "s") + "</span>";
+      }
+    }
+
+    renderScopeCard();
+    // Seed one tick so the demo isn't empty
+    MOCKUP_KB[0].ticked = true;
+    renderScopeCard();
+
+    /* ----------------------------------------------------------------- *
+     *  THINKING — v2 collapses the streamed thinking buffer into a
+     *  single pulsing "Thinking" label. The full text is hidden by
+     *  default; a toggle button (revealed on hover) flips between
+     *  collapsed (chevron-right) and expanded (chevron-down) states.
+     * ----------------------------------------------------------------- */
+    var thinkingNode    = null;
+    var thinkingBuf     = "";
+    var thinkingDeltaCount = 0;
+
+    function ensureThinkingNode() {
+      if (thinkingNode) return thinkingNode;
+      thinkingNode = appendNode(
+        '<div class="w-full max-w-2xl text-slate-500" data-thinking>' +
+          '<div class="flex items-center gap-2">' +
+            '<i data-lucide="sparkles" class="h-3.5 w-3.5 text-blue-500"></i>' +
+            '<span data-thinking-label class="thinking-pulse text-xs font-bold tracking-wide font-sans">Thinking</span>' +
+            '<span data-thinking-meta class="text-[10px] font-mono text-slate-400 ml-1"></span>' +
+            '<button type="button" data-thinking-toggle aria-expanded="false" aria-label="Expand thinking"' +
+                  ' class="thinking-toggle ml-1 inline-flex items-center justify-center h-5 w-5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">' +
+              '<i data-lucide="chevron-right" data-thinking-chevron class="h-3.5 w-3.5"></i>' +
+            '</button>' +
+          '</div>' +
+          '<div data-thinking-body class="hidden mt-2 ml-1 pl-3 border-l border-slate-200 text-[12px] text-slate-600 font-medium leading-relaxed whitespace-pre-wrap">' +
+          '</div>' +
+        '</div>'
+      );
+
+      // Wire the hover-revealed toggle.
+      var toggleBtn = thinkingNode.querySelector("[data-thinking-toggle]");
+      var bodyEl    = thinkingNode.querySelector("[data-thinking-body]");
+      var chevEl    = thinkingNode.querySelector("[data-thinking-chevron]");
+      var rootEl    = thinkingNode.querySelector("[data-thinking]") || thinkingNode.firstChild;
+
+      toggleBtn.addEventListener("click", function () {
+        var isHidden = bodyEl.classList.contains("hidden");
+        if (isHidden) {
+          bodyEl.classList.remove("hidden");
+          toggleBtn.setAttribute("aria-expanded", "true");
+          toggleBtn.setAttribute("aria-label", "Collapse thinking");
+          rootEl.classList.add("is-expanded");
+          // chevron-down when expanded
+          chevEl.setAttribute("data-lucide", "chevron-down");
+        } else {
+          bodyEl.classList.add("hidden");
+          toggleBtn.setAttribute("aria-expanded", "false");
+          toggleBtn.setAttribute("aria-label", "Expand thinking");
+          rootEl.classList.remove("is-expanded");
+          // chevron-right when collapsed
+          chevEl.setAttribute("data-lucide", "chevron-right");
+        }
+        // Re-render the swapped <i> tag.
+        refreshIcons();
+      });
+
+      return thinkingNode;
+    }
+
+    function onThinkingDelta(ev) {
+      ensureThinkingNode();
+      thinkingDeltaCount += 1;
+      thinkingBuf += (ev && ev.text) ? ev.text : "";
+
+      var meta = thinkingNode.querySelector("[data-thinking-meta]");
+      if (meta) meta.textContent = "· " + thinkingDeltaCount + " delta" + (thinkingDeltaCount === 1 ? "" : "s");
+
+      // Keep the body in sync so when the user expands they see the full
+      // accumulated thinking buffer (no jump from "empty" to "full").
+      var body = thinkingNode.querySelector("[data-thinking-body]");
+      if (body) body.textContent = thinkingBuf;
+    }
+
+    function onThinkingEnd() {
+      if (!thinkingNode) return;
+      var label = thinkingNode.querySelector("[data-thinking-label]");
+      if (label) {
+        label.classList.remove("thinking-pulse");
+        label.classList.add("text-emerald-600");
+        label.textContent = "Thought";
+      }
+      var meta = thinkingNode.querySelector("[data-thinking-meta]");
+      if (meta) meta.textContent = "· " + thinkingDeltaCount + " deltas · done";
+      // reset for next turn — the DOM node stays in the feed; future deltas
+      // would mount a fresh node.
+      thinkingNode = null;
+      thinkingBuf = "";
+      thinkingDeltaCount = 0;
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  USER PROMPT — v2: NO KB chips appended to the bubble. Selection
+     *  lives only on the right-panel scope card.
+     * ----------------------------------------------------------------- */
+    function renderUserPrompt(ev) {
+      var text = stripScopeWrap(ev.text || "");
+      appendNode(
+        '<div class="flex flex-col items-end ml-auto w-full max-w-3xl">' +
+          '<div class="bg-[#f1f5f9] border border-slate-200 hover:border-slate-300 text-slate-900 rounded-2xl px-5 py-3 shadow-xs max-w-md">' +
+            '<div class="text-[13px] font-medium leading-relaxed">' + escapeHtml(text) + '</div>' +
+          '</div>' +
+        '</div>'
+      );
+      // first prompt of a turn locks attachment chips (no more removal)
+      lockAttachments();
+    }
+
+    function renderAssistantText(ev) {
+      appendNode(
+        '<div class="flex flex-col items-start mr-auto w-full max-w-3xl">' +
+          '<div class="space-y-3 text-slate-800 max-w-full font-sans">' +
+            renderMarkdown(ev.text) +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  MAIN-AGENT TOOL CHAIN — same pattern as v1, but skips Agent-tool
+     *  events (those route to the right-sidebar subagent panel) and
+     *  any depth>=1 events (those belong to a subagent).
+     * ----------------------------------------------------------------- */
+    var currentChain = null;
+    var currentChainBody = null;
+    var currentChainCount = 0;
+    var currentChainStatusPill = null;
+    var currentChainHeaderTitle = null;
+
+    function getToolIcon(name) {
+      var n = (name || "").toLowerCase();
+      if (n.indexOf("read") !== -1)  return "file-text";
+      if (n.indexOf("write") !== -1 || n.indexOf("edit") !== -1) return "pencil";
+      if (n.indexOf("grep") !== -1)  return "search";
+      if (n.indexOf("glob") !== -1)  return "folder-search";
+      if (n.indexOf("bash") !== -1 || n.indexOf("shell") !== -1) return "terminal";
+      if (n.indexOf("xlsx") !== -1 || n.indexOf("excel") !== -1) return "file-spreadsheet";
+      if (n.indexOf("agent") !== -1 || n.indexOf("task") !== -1 || n.indexOf("todo") !== -1) return "users";
+      return "layers";
+    }
+
+    function startChainIfNeeded() {
+      if (currentChain) return;
+      var node = appendNode(
+        '<div class="flex flex-col items-start mr-auto w-full max-w-3xl">' +
+          '<div class="border border-slate-200 rounded-xl bg-[#f8fafc] shadow-xs overflow-hidden w-full">' +
+            '<div class="px-4 py-2.5 bg-slate-100/80 border-b border-slate-200 flex items-center justify-between cursor-pointer select-none">' +
+              '<div class="flex items-center gap-2 min-w-0">' +
+                '<i data-lucide="terminal" class="h-4 w-4 text-slate-500 shrink-0"></i>' +
+                '<span data-tc-title class="text-xs font-semibold text-slate-700 truncate">Running 0 diagnostic commands…</span>' +
+                '<span data-tc-pill class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-600 border border-sky-200 ml-1">EXECUTING</span>' +
+              '</div>' +
+              '<div class="flex items-center gap-1 text-slate-400 shrink-0">' +
+                '<span class="text-[10px] font-semibold">Collapse steps</span>' +
+                '<i data-lucide="chevron-up" class="h-4 w-4"></i>' +
+              '</div>' +
+            '</div>' +
+            '<div data-tc-body class="p-3 bg-white space-y-2.5 divide-y divide-slate-100"></div>' +
+          '</div>' +
+        '</div>'
+      );
+      currentChain = node;
+      currentChainBody = node.querySelector("[data-tc-body]");
+      currentChainStatusPill = node.querySelector("[data-tc-pill]");
+      currentChainHeaderTitle = node.querySelector("[data-tc-title]");
+      currentChainCount = 0;
+    }
+
+    function previewInput(input) {
+      try {
+        if (!input) return "";
+        if (input.file_path) return input.file_path;
+        if (input.command)   return input.command;
+        if (input.pattern)   return input.pattern + (input.path ? " · " + input.path : "");
+        if (input.description) return input.description;
+        return JSON.stringify(input);
+      } catch (e) { return ""; }
+    }
+    function truncate(s, n) { return s && s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+    function renderToolUseInChain(ev) {
+      startChainIfNeeded();
+      currentChainCount += 1;
+      currentChainHeaderTitle.textContent =
+        "Running " + currentChainCount + " diagnostic command" + (currentChainCount === 1 ? "" : "s") + "…";
+
+      var icon = getToolIcon(ev.name);
+      var preview = truncate(previewInput(ev.input), 60);
+
+      var row = document.createElement("div");
+      row.className = "tc-row pt-2.5 first:pt-0";
+      row.setAttribute("data-tc-id", ev.tool_use_id);
+      row.innerHTML =
+        '<div data-tc-head class="flex items-center justify-between cursor-pointer group">' +
+          '<div class="flex items-center gap-2 min-w-0">' +
+            '<span class="h-7 w-7 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">' +
+              '<i data-lucide="' + icon + '" class="h-3.5 w-3.5 text-indigo-500"></i>' +
+            '</span>' +
+            '<span class="font-semibold text-slate-800 text-xs">' + escapeHtml(ev.name) + '</span>' +
+            (preview ? '<span class="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-500 truncate max-w-[260px]">' + escapeHtml(preview) + '</span>' : '') +
+          '</div>' +
+          '<div class="flex items-center gap-2 shrink-0">' +
+            '<span data-tc-status class="flex items-center justify-center">' +
+              '<i data-lucide="loader-2" class="h-3.5 w-3.5 text-blue-500 animate-spin"></i>' +
+            '</span>' +
+            '<i data-lucide="chevron-down" class="h-3.5 w-3.5 text-slate-400 group-hover:text-slate-600"></i>' +
+          '</div>' +
+        '</div>' +
+        '<div data-tc-detail class="ml-9 pt-2 mt-2 border-t border-slate-100 hidden space-y-3">' +
+          '<div>' +
+            '<div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono mb-1">Input</div>' +
+            '<pre class="p-3 bg-zinc-950 text-slate-200 rounded-lg font-mono text-[10px] leading-relaxed overflow-x-auto">' +
+            escapeHtml(JSON.stringify(ev.input || {}, null, 2)) + '</pre>' +
+          '</div>' +
+          '<div data-tc-result-slot></div>' +
+        '</div>';
+      currentChainBody.appendChild(row);
+
+      var head = row.querySelector("[data-tc-head]");
+      var detail = row.querySelector("[data-tc-detail]");
+      head.addEventListener("click", function () { detail.classList.toggle("hidden"); });
+
+      refreshIcons();
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function renderToolResultInChain(ev) {
+      if (!currentChain) return;
+      var row = currentChainBody.querySelector('[data-tc-id="' + ev.tool_use_id + '"]');
+      if (!row) return;
+
+      var statusEl2 = row.querySelector("[data-tc-status]");
+      if (ev.is_error) {
+        statusEl2.innerHTML =
+          '<span class="h-4 w-4 rounded-full bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center font-bold">✕</span>';
+      } else {
+        statusEl2.innerHTML =
+          '<span class="h-4 w-4 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center font-bold">✓</span>';
+      }
+
+      var slot = row.querySelector("[data-tc-result-slot]");
+      slot.innerHTML =
+        '<div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono mb-1">Result</div>' +
+        '<div class="p-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-mono text-xs leading-relaxed">' +
+        escapeHtml(ev.summary || "") + '</div>';
+
+      refreshIcons();
+    }
+
+    function closeChainIfOpen() {
+      if (!currentChain) return;
+      currentChainStatusPill.className =
+        "text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 ml-1";
+      currentChainStatusPill.textContent = "TURN_COMPLETED";
+      currentChainHeaderTitle.textContent =
+        "Ran " + currentChainCount + " diagnostic command" + (currentChainCount === 1 ? "" : "s");
+      currentChain = null;
+      currentChainBody = null;
+      currentChainStatusPill = null;
+      currentChainHeaderTitle = null;
+      currentChainCount = 0;
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  SUBAGENT PANEL — right sidebar.
+     *  When the main agent calls the `Agent` tool (depth=0):
+     *    - mount a subagent card in #subagent-list
+     *    - show only its latest tool (NOT a full chat stream)
+     *    - on tool.result with matching tool_use_id at depth=0 → mark
+     *      the subagent as done.
+     *  Nested tool.use / tool.result events at depth>=1 update the
+     *  "latest tool" line of the parent subagent.
+     * ----------------------------------------------------------------- */
+    var subagents = {};       // tool_use_id → {node, latestToolNode, status, parentId, ...}
+    var subagentOrder = [];
+
+    function ensureSubagentListVisible() {
+      subagentEmpty.classList.add("hidden");
+      subagentCountEl.textContent = String(subagentOrder.length);
+    }
+
+    function shortenSubagentDesc(input) {
+      if (!input) return "(subagent)";
+      if (input.description) return input.description;
+      if (input.subagent_type) return input.subagent_type;
+      return "(subagent)";
+    }
+
+    // Maximum number of recent tool steps shown per subagent card.
+    // 1-2 latest only — keeps the right sidebar dense and scannable.
+    var SUBAGENT_STEP_WINDOW = 2;
+
+    function mountSubagent(ev) {
+      var card = document.createElement("div");
+      card.className = "rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden";
+      card.setAttribute("data-sub-id", ev.tool_use_id);
+
+      var subType = ev.input && ev.input.subagent_type ? ev.input.subagent_type : "subagent";
+      card.innerHTML =
+        '<div class="px-3 py-2 border-b border-slate-100 flex items-center gap-2">' +
+          '<span class="h-6 w-6 rounded-lg bg-violet-50 border border-violet-200 flex items-center justify-center">' +
+            '<i data-lucide="bot" class="h-3.5 w-3.5 text-violet-600"></i>' +
+          '</span>' +
+          '<div class="min-w-0 flex-1">' +
+            '<div class="text-[11px] font-semibold text-slate-800 truncate" data-sub-title>' +
+              escapeHtml(shortenSubagentDesc(ev.input)) + '</div>' +
+            '<div class="text-[9px] font-mono text-slate-400 truncate">' + escapeHtml(subType) + '</div>' +
+          '</div>' +
+          '<span data-sub-pill class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 flex items-center gap-1">' +
+            '<span class="h-1.5 w-1.5 rounded-full subagent-running-dot bg-sky-500"></span>' +
+            'RUNNING' +
+          '</span>' +
+        '</div>' +
+        '<div class="px-3 py-2 bg-slate-50/60">' +
+          '<div class="text-[9px] font-bold uppercase tracking-widest text-slate-400 mb-1">Recent steps</div>' +
+          '<ul data-sub-steps class="space-y-1.5">' +
+            '<li class="text-[11px] text-slate-500 font-medium italic">spawning…</li>' +
+          '</ul>' +
+        '</div>';
+      subagentList.appendChild(card);
+
+      subagents[ev.tool_use_id] = {
+        node: card,
+        stepsNode: card.querySelector("[data-sub-steps]"),
+        pillNode: card.querySelector("[data-sub-pill]"),
+        titleNode: card.querySelector("[data-sub-title]"),
+        startedAt: Date.now(),
+        // Map nested-step tool_use_id → its <li> node, so a tool.result can
+        // flip the same step's status pill instead of appending a row.
+        stepRows: {},
+        // Track insertion order so we can evict the oldest when the rolling
+        // window is full.
+        stepOrder: [],
+      };
+      subagentOrder.push(ev.tool_use_id);
+      ensureSubagentListVisible();
+      refreshIcons();
+    }
+
+    /**
+     * Render one nested tool step as a single line:
+     *
+     *   <icon> <Tool type> <description>
+     *
+     * The status indicator (spinner / ✓ / ✗) sits at the right edge so the
+     * description column can truncate without colliding with it.
+     */
+    function buildSubagentStepRow(ev) {
+      var icon = getToolIcon(ev.name);
+      var description = "";
+      if (ev.input) {
+        if (ev.input.description) description = ev.input.description;
+        else description = previewInput(ev.input);
+      }
+      description = truncate(description || "", 60);
+
+      var li = document.createElement("li");
+      li.className = "flex items-center gap-2 text-[11px] leading-snug";
+      li.setAttribute("data-sub-step-id", ev.tool_use_id);
+      li.innerHTML =
+        '<i data-lucide="' + icon + '" class="h-3.5 w-3.5 text-indigo-500 shrink-0"></i>' +
+        '<span class="font-semibold text-slate-800 shrink-0">' + escapeHtml(ev.name) + '</span>' +
+        (description
+          ? '<span class="text-slate-500 truncate min-w-0 flex-1">' + escapeHtml(description) + '</span>'
+          : '<span class="flex-1 min-w-0"></span>') +
+        '<span data-sub-step-status class="shrink-0">' +
+          '<i data-lucide="loader-2" class="h-3 w-3 text-blue-500 animate-spin"></i>' +
+        '</span>';
+      return li;
+    }
+
+    function updateSubagentLatestStep(ev) {
+      var parentId = ev.parent_tool_use_id;
+      if (!parentId || !subagents[parentId]) return;
+      var sub = subagents[parentId];
+
+      // First real step — drop the "spawning…" placeholder.
+      if (sub.stepOrder.length === 0) sub.stepsNode.innerHTML = "";
+
+      var li = buildSubagentStepRow(ev);
+      sub.stepsNode.appendChild(li);
+      sub.stepRows[ev.tool_use_id] = li;
+      sub.stepOrder.push(ev.tool_use_id);
+
+      // Rolling window — evict oldest once we exceed SUBAGENT_STEP_WINDOW.
+      while (sub.stepOrder.length > SUBAGENT_STEP_WINDOW) {
+        var oldId = sub.stepOrder.shift();
+        var oldNode = sub.stepRows[oldId];
+        if (oldNode && oldNode.parentNode) oldNode.parentNode.removeChild(oldNode);
+        delete sub.stepRows[oldId];
+      }
+
+      refreshIcons();
+    }
+
+    function markSubagentNestedResult(ev) {
+      var parentId = ev.parent_tool_use_id;
+      if (!parentId || !subagents[parentId]) return;
+      var sub = subagents[parentId];
+      var li = sub.stepRows[ev.tool_use_id];
+      // Step may have been evicted by the rolling window — fine, nothing to flip.
+      if (!li) return;
+      var statusEl = li.querySelector("[data-sub-step-status]");
+      if (!statusEl) return;
+      statusEl.innerHTML = ev.is_error
+        ? '<span class="h-3.5 w-3.5 rounded-full bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center font-bold text-[10px]">✕</span>'
+        : '<span class="h-3.5 w-3.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center font-bold text-[10px]">✓</span>';
+    }
+
+    function finishSubagent(ev) {
+      var sub = subagents[ev.tool_use_id];
+      if (!sub) return;
+      var dur = ((Date.now() - sub.startedAt) / 1000).toFixed(1);
+      sub.pillNode.className =
+        "text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 " +
+        (ev.is_error ? "bg-rose-50 text-rose-700 border border-rose-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200");
+      sub.pillNode.innerHTML = (ev.is_error ? '<i data-lucide="x" class="h-2.5 w-2.5"></i>FAILED' : '<i data-lucide="check" class="h-2.5 w-2.5"></i>DONE');
+      // Replace the rolling-step list with the final summary preview.
+      sub.stepsNode.innerHTML =
+        '<li class="text-[10px] text-slate-500 leading-relaxed line-clamp-2">' +
+          escapeHtml(truncate(ev.summary || "(no summary)", 110)) +
+        '</li>' +
+        '<li class="mt-1 text-[9px] font-mono text-slate-400">finished in ' + dur + 's</li>';
+      refreshIcons();
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  TOOL DISPATCH — picks between the feed chain and the subagent panel.
+     * ----------------------------------------------------------------- */
+    function renderToolUse(ev) {
+      var depth = ev.depth || 0;
+
+      // depth=0 + name=Agent  →  spawn a new subagent panel
+      if (depth === 0 && ev.name === "Agent") {
+        // Close the in-feed chain so subagent timeline stays readable
+        closeChainIfOpen();
+        mountSubagent(ev);
+        return;
+      }
+
+      // depth>=1 with a parent_tool_use_id  →  belongs to a subagent
+      if (depth >= 1 && ev.parent_tool_use_id) {
+        updateSubagentLatestStep(ev);
+        return;
+      }
+
+      // otherwise → main feed chain
+      renderToolUseInChain(ev);
+    }
+
+    function renderToolResult(ev) {
+      var depth = ev.depth || 0;
+
+      // matches a subagent root
+      if (subagents[ev.tool_use_id]) {
+        finishSubagent(ev);
+        return;
+      }
+
+      // nested subagent step result
+      if (depth >= 1 && ev.parent_tool_use_id) {
+        markSubagentNestedResult(ev);
+        return;
+      }
+
+      renderToolResultInChain(ev);
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  TODOS — v2: numbered + status icons.
+     * ----------------------------------------------------------------- */
+    function renderTodosSnapshot(ev) {
+      var items = ev.items || [];
+      if (items.length === 0) {
+        todosList.classList.add("hidden");
+        todosEmpty.classList.remove("hidden");
+        return;
+      }
+      todosEmpty.classList.add("hidden");
+      todosList.classList.remove("hidden");
+      todosList.innerHTML = "";
+
+      items.forEach(function (it, idx) {
+        var li = document.createElement("li");
+        li.className = "flex items-start gap-2.5 text-[12px] font-medium leading-relaxed";
+
+        var indicatorHtml = "";
+        var textCls = "text-slate-700";
+        if (it.status === "completed") {
+          indicatorHtml =
+            '<span class="h-5 w-5 rounded-full bg-blue-600 flex items-center justify-center shrink-0">' +
+              '<i data-lucide="check" class="h-3 w-3 text-white"></i>' +
+            '</span>';
+          textCls = "text-slate-400 line-through";
+        } else if (it.status === "in_progress") {
+          indicatorHtml =
+            '<span class="h-5 w-5 rounded-full border-2 border-blue-500 bg-white flex items-center justify-center shrink-0">' +
+              '<span class="text-[10px] font-bold font-mono text-blue-600">' + (idx + 1) + '</span>' +
+            '</span>';
+          textCls = "text-slate-900 font-semibold";
+        } else {
+          indicatorHtml =
+            '<span class="h-5 w-5 rounded-full border-2 border-slate-300 bg-white flex items-center justify-center shrink-0">' +
+              '<span class="text-[10px] font-bold font-mono text-slate-500">' + (idx + 1) + '</span>' +
+            '</span>';
+          textCls = "text-slate-700";
+        }
+
+        li.innerHTML = indicatorHtml +
+          '<span class="' + textCls + '">' + escapeHtml(it.text) + '</span>';
+        todosList.appendChild(li);
+      });
+      refreshIcons();
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  RESULT — close turn.
+     * ----------------------------------------------------------------- */
+    function renderResult(ev) {
+      closeChainIfOpen();
+      var cost = (ev.cost_usd != null) ? "$" + ev.cost_usd.toFixed(4) : "—";
+      var dur  = (ev.duration_s != null) ? ev.duration_s.toFixed(2) + "s" : "—";
+      var turns = ev.turns != null ? ev.turns : "—";
+
+      appendNode(
+        '<div class="pt-2 w-full max-w-3xl">' +
+          '<div class="flex items-center gap-2 text-slate-500 opacity-70 text-xs py-1.5 font-medium border-t border-slate-100 mt-2">' +
+            '<i data-lucide="check-circle" class="h-3.5 w-3.5 text-emerald-500"></i>' +
+            '<span>Turn completed · done in ' + dur + ' · ' + turns + ' turn' + (turns === 1 ? '' : 's') + ' · ' + cost + '</span>' +
+          '</div>' +
+        '</div>'
+      );
+
+      resultCard.innerHTML =
+        '<div class="space-y-1">' +
+          '<div class="flex justify-between"><span class="text-slate-400">turns</span><span class="font-mono font-semibold text-slate-800">' + turns + '</span></div>' +
+          '<div class="flex justify-between"><span class="text-slate-400">duration</span><span class="font-mono font-semibold text-slate-800">' + dur + '</span></div>' +
+          '<div class="flex justify-between"><span class="text-slate-400">cost</span><span class="font-mono font-semibold text-slate-800">' + cost + '</span></div>' +
+        '</div>';
+    }
+
+    /* ----------------------------------------------------------------- *
+     *  Replay engine — drips events with realistic delays.
+     * ----------------------------------------------------------------- */
+    var DELAYS = {
+      "user.prompt":              250,
+      "assistant.thinking.delta": 250,
+      "assistant.thinking.end":   400,
+      "assistant.text":           900,
+      "tool.use":                 500,
+      "tool.result":              550,
+      "todos.snapshot":           300,
+      "result":                   500,
+    };
+
+    var dispatchTable = {
+      "user.prompt":              renderUserPrompt,
+      "assistant.thinking.delta": onThinkingDelta,
+      "assistant.thinking.end":   onThinkingEnd,
+      "assistant.text":           renderAssistantText,
+      "tool.use":                 renderToolUse,
+      "tool.result":              renderToolResult,
+      "todos.snapshot":           renderTodosSnapshot,
+      "result":                   renderResult,
+    };
+
+    function clearFeed() {
+      feed.innerHTML = "";
+      currentChain = null;
+      currentChainBody = null;
+      currentChainCount = 0;
+      thinkingNode = null;
+      thinkingDeltaCount = 0;
+      // wipe subagent panel
+      subagents = {};
+      subagentOrder = [];
+      // remove all subagent cards but keep the empty-state div
+      Array.from(subagentList.querySelectorAll('[data-sub-id]')).forEach(function (el) { el.remove(); });
+      subagentEmpty.classList.remove("hidden");
+      subagentCountEl.textContent = "0";
+      // reset todos
+      todosList.innerHTML = "";
+      todosList.classList.add("hidden");
+      todosEmpty.classList.remove("hidden");
+      // reset attachment lock so the demo loops cleanly
+      attachState.locked = false;
+      renderAttachments();
+      resultCard.innerHTML = '<div class="text-xs text-slate-400">(waiting…)</div>';
+    }
+
+    var inFlight = null;
+    function startReplay() {
+      if (inFlight) clearTimeout(inFlight);
+      clearFeed();
+      setStatus("connecting…", "connecting");
+
+      var i = 0;
+      function step() {
+        if (i === 0) setStatus("streaming", "live");
+        if (i >= MOCKUP_EVENTS.length) {
+          setStatus("done", "open");
+          inFlight = null;
+          return;
+        }
+        var ev = MOCKUP_EVENTS[i++];
+        var fn = dispatchTable[ev.type];
+        if (fn) fn(ev);
+        var delay = DELAYS[ev.type] || 400;
+        inFlight = setTimeout(step, delay);
+      }
+      inFlight = setTimeout(step, 350);
+    }
+
+    document.getElementById("replay-btn").addEventListener("click", startReplay);
+
+    refreshIcons();
+    startReplay();
+
+  })();
+  </script>
+</body>
+</html>
