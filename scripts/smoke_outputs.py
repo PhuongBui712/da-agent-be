@@ -309,6 +309,65 @@ def main() -> int:
 
         _try_delete(client, sid_2)
 
+        # --- 8. Behavioral routing — main agent must delegate ----------------
+        # Phase 8a: simple inline Q&A → main agent answers itself, ZERO Agent spawns.
+        # Phase 8b: deliverable → main agent MUST dispatch the reporter subagent.
+        # See <delegation_rules> in src/da_agent/agent/prompts.py.
+        # The SDK tool name is "Agent" (renamed from "Task" in newer SDK builds).
+        print("\n[smoke] phase 8a: simple Q&A — must NOT spawn Agent")
+        r3 = client.post(f"{URL}/sessions", json={"name": "smoke-inline-qa"})
+        if r3.status_code != 201:
+            print(f"=== FAIL: POST /sessions (phase 8a) -> {r3.status_code} {r3.text} ===")
+            return 1
+        sid_3 = r3.json()["id"]
+        print(f"[smoke] phase-8a session id = {sid_3}")
+        try:
+            events_3 = _stream_turn(client, sid_3, "What is 2+2? Answer inline.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"=== FAIL: SSE stream error (phase 8a): {exc} ===")
+            _try_delete(client, sid_3)
+            return 1
+        agent_uses_3 = [
+            (t, p) for (t, p) in events_3
+            if t == "tool.use" and p.get("name") == "Agent"
+        ]
+        res.check(
+            "phase8a: simple Q&A spawns ZERO Agent tool calls",
+            len(agent_uses_3) == 0,
+            f"got {len(agent_uses_3)} Agent spawn(s)",
+        )
+        _try_delete(client, sid_3)
+
+        print("\n[smoke] phase 8b: deliverable — must dispatch reporter")
+        r4 = client.post(f"{URL}/sessions", json={"name": "smoke-deliverable-route"})
+        if r4.status_code != 201:
+            print(f"=== FAIL: POST /sessions (phase 8b) -> {r4.status_code} {r4.text} ===")
+            return 1
+        sid_4 = r4.json()["id"]
+        print(f"[smoke] phase-8b session id = {sid_4}")
+        try:
+            events_4 = _stream_turn_with_autoanswer(
+                client,
+                sid_4,
+                "Tạo 1 file excel dummy về chủ đề retail (3-5 cột, 5-10 hàng dữ liệu giả).",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"=== FAIL: SSE stream error (phase 8b): {exc} ===")
+            _try_delete(client, sid_4)
+            return 1
+        reporter_dispatches = [
+            (t, p) for (t, p) in events_4
+            if t == "tool.use"
+            and p.get("name") == "Agent"
+            and (p.get("input") or {}).get("subagent_type") == "reporter"
+        ]
+        res.check(
+            "phase8b: deliverable dispatches reporter subagent (>=1 Agent call)",
+            len(reporter_dispatches) >= 1,
+            f"got {len(reporter_dispatches)} reporter dispatch(es)",
+        )
+        _try_delete(client, sid_4)
+
     # --- Summary -----------------------------------------------------------
     if not res.failures:
         print("\n=== PASS ===")
