@@ -131,3 +131,48 @@ def test_append_drops_stale_3_target_enumeration(tmp_path):
     # The old AskUserQuestion options enumeration listed only the original
     # three targets; the expansion replaces it with the 5-label form.
     assert "New .xlsx, New sheet, Pick sheet" not in a
+
+
+def test_append_contains_delegation_rules_block(tmp_path):
+    sp = build_system_prompt(_settings(tmp_path))
+    a = sp["append"]
+    # The orchestrator role + routing table must be encoded as its own
+    # XML block so the model treats it as a hard contract, not advisory.
+    assert "<delegation_rules>" in a
+    assert "</delegation_rules>" in a
+    block = a.split("<delegation_rules>", 1)[1].split("</delegation_rules>", 1)[0]
+    # All three subagent_type values must appear inside the block.
+    assert "profiler" in block
+    assert "analyst" in block
+    assert "reporter" in block
+    # The dispatch contract names the SDK tool + the kwarg the model passes.
+    # The tool is named `Agent` in the SDK (formerly `Task` — renamed in
+    # newer claude-agent-sdk builds; subagent_type kwarg is unchanged).
+    assert "Agent" in block
+    assert "subagent_type" in block
+    # Guard against accidentally re-introducing the old `Task` tool name.
+    assert "the `Task` tool" not in block
+    # Routing table preamble must be present (catches accidental rewording).
+    assert "Routing table" in block
+
+
+def test_append_delegation_workflow_mandates_orchestrator_role(tmp_path):
+    sp = build_system_prompt(_settings(tmp_path))
+    a = sp["append"]
+    # Step 6 of <workflow> was rewritten from advisory to mandate-form.
+    # If someone reverts it, this token disappears.
+    assert "never writes the deliverable itself" in a
+    assert "orchestrator" in a.lower()
+
+
+def test_append_delegation_examples_present(tmp_path):
+    sp = build_system_prompt(_settings(tmp_path))
+    a = sp["append"]
+    # Example 9 — deliverable request → must dispatch reporter.
+    assert "Tạo 1 file excel dummy về chủ đề retail" in a
+    assert 'subagent_type="reporter"' in a
+    # Example 10 — inline lookup → must NOT dispatch a subagent.
+    assert "What's in cell A1" in a
+    # Tolerate the soft line wrap inside <example index="10">.
+    assert "Do NOT dispatch a" in a
+    assert "subagent" in a
