@@ -83,7 +83,7 @@ _BASE_TOOLS = [
     "Grep",
     "TodoWrite",
     "NotebookEdit",
-    "Task",
+    "Agent",
     "ExitPlanMode",
     "AskUserQuestion",
 ]

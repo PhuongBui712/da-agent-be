@@ -1,6 +1,6 @@
 """Subagents used by the end-to-end analyst workflow.
 
-The main agent dispatches these via the `Task` tool during a complex investigation.
+The main agent dispatches these via the `Agent` tool during a complex investigation.
 Defining them programmatically (AgentDefinition) keeps orchestration in code while the
 prompts stay editable.
 
