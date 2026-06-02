@@ -27,9 +27,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-# Bash: `> path` redirection or an `--output` flag. Conservative: only flags
-# we know mean "output target".
-_BASH_REDIR_RE = re.compile(r"(?:>\s*|--output[= ])(\S+)")
+# Bash: `> path` / `>> path` redirection or an `--output` flag. Conservative:
+# the captured token MUST be an absolute path (`/...`) and must NOT include
+# shell metacharacters that would split a token. Three classes of false
+# positive must be rejected (regression 2026-06-02 Bug-B):
+#   1. FD redirects: `2>&1`, `1>&2`, `&>file` — preceded by digit or `&`.
+#   2. Token starts with `&` (e.g. `>&1`).
+#   3. Bare numeric or relative tokens from non-shell contexts, e.g. Python
+#      comparisons `[b for b in data if b > 127]` (matches `> 127`).
+# We require the captured path to start with `/`. The post-result dir-scan
+# branch is the safety net for writes that don't fit this strict shape.
+_BASH_REDIR_RE = re.compile(
+    r"(?:(?<![\d&])>{1,2}\s*|--output[= ])(/[^\s;|&<>]+)"
+)
 _WRITE_TOOLS = {"Write", "Edit", "NotebookEdit"}
 _SIDECAR_RE = re.compile(r"^\.out_[0-9a-f]{16}\.meta\.json$")
 

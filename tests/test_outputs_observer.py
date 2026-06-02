@@ -373,3 +373,95 @@ def test_observer_dedup_across_multiple_tool_results(tmp_path):
     obs.observe_tool_use("tool_b", "Bash", {"command": "echo verify"})
     obs.observe_tool_result("tool_b", [{"type": "text", "text": "ok"}], False)
     assert len(fired) == 1, "no new file → no new detection"
+
+
+def test_classify_follows_symlinks(tmp_path):
+    """Spec §8.5 regression — when the agent writes through the per-session
+    symlink farm path (`<sessions-data>/<sid>/outputs/x.xlsx`), the observer
+    must resolve to the canonical `outputs/<sid>/x.xlsx` and emit standalone.
+    """
+    import os
+
+    sid = "sess_test_symlink"
+    outputs_dir = tmp_path / "outputs"
+    canonical = outputs_dir / sid
+    canonical.mkdir(parents=True)
+
+    # Per-session symlink farm view → canonical outputs.
+    farm = tmp_path / "sessions-data" / sid
+    farm.mkdir(parents=True)
+    view = farm / "outputs"
+    os.symlink(canonical, view, target_is_directory=True)
+
+    fired: list[OutputDetection] = []
+    obs = OutputsObserver(
+        outputs_dir=outputs_dir,
+        session_id=sid,
+        kb_dir=tmp_path / "kb",
+        attachments_dir=tmp_path / "attachments",
+        on_detect=fired.append,
+    )
+
+    # Write target through the SYMLINKED path; classify must follow the link.
+    via_symlink = view / "report.xlsx"
+    det = obs._classify(via_symlink)
+    assert det is not None
+    assert det.kind == "standalone"
+    assert det.filename == "report.xlsx"
+    assert det.session_id == sid
+    # The detection's file_path is the resolved canonical path.
+    assert det.file_path == (canonical / "report.xlsx").resolve()
+
+
+# --------------------------------------------------------------------------- #
+# Bash-redirect regex regression (2026-06-02 Bug-B)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "command",
+    [
+        # File-descriptor redirects: 2>&1 / 1>&2 / >&1 / &>file. None should
+        # be parsed as a write target.
+        "ls -la /home/phuong/.da-agent/sessions-data/sess_X/outputs/ 2>&1",
+        "touch /home/phuong/.da-agent/outputs/sess/output.pptx 2>&1; echo exit:$?",
+        "python build_deck.py 2>&1",
+        # Python comparison inside a heredoc / -c "...". `> 127` looked like
+        # a redirect to the legacy regex.
+        'python3 -c "data = open(\\"x\\").read(); high = [b for b in data if b > 127]"',
+        # Bare `>&1` and `&>file` shapes.
+        "echo hi >&1",
+        # `1>file.log` — token starts with digit ahead of `>`.
+        "command 1>file.log 2>file.err",
+    ],
+)
+def test_bash_fd_redirects_do_not_fire(dirs, make_observer, command):
+    """Bug-B: file-descriptor redirects and unrelated `>` tokens must not
+    register as output writes.
+    """
+    obs, events = make_observer()
+    obs.observe_tool_use("u_fd", "Bash", {"command": command})
+    obs.observe_tool_result("u_fd", "", False)
+    assert events == [], f"unexpected detection for command: {command!r}"
+
+
+def test_bash_relative_redirect_not_classified_as_outputs(dirs, make_observer):
+    """A `>` redirect to a relative path must not match the regex (we now
+    require absolute paths starting with `/`)."""
+    obs, events = make_observer()
+    obs.observe_tool_use(
+        "u_rel", "Bash", {"command": "ls > listing.txt"}
+    )
+    obs.observe_tool_result("u_rel", "", False)
+    assert events == []
+
+
+def test_bash_absolute_redirect_into_outputs_still_fires(dirs, make_observer):
+    """Sanity: legitimate `>` into `outputs/<sid>/...` still classifies."""
+    outputs_dir, _, _ = dirs
+    obs, events = make_observer()
+    target = outputs_dir / SID / "ok.csv"
+    obs.observe_tool_use(
+        "u_ok", "Bash", {"command": f"echo data > {target}"}
+    )
+    obs.observe_tool_result("u_ok", "", False)
+    assert len(events) == 1
+    assert events[0].filename == "ok.csv"
