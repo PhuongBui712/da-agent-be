@@ -71,6 +71,13 @@ async def delete_session(sid: str, state: AppState = Depends(get_state)) -> None
     # don't block runtime cleanup.
     await state.outputs.delete_session_outputs(sid)
     await state.discard_runtime(sid)
+    # Spec §8.5 — wipe the per-session symlink farm under
+    # `<sessions-data>/<sid>/`. Best-effort; rmtree only follows symlinks
+    # to drop the link entries themselves (canonical kb_dir / outputs_dir
+    # subtrees are not affected because they are linked, not nested).
+    import shutil
+
+    shutil.rmtree(state.settings.session_data_dir(sid), ignore_errors=True)
 
 
 @router.post(
