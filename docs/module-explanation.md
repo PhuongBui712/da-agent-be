@@ -6,6 +6,50 @@
 
 ---
 
+## Table of Contents
+
+- [0. Tổng quan kiến trúc](#0-tổng-quan-kiến-trúc)
+- [1. Entry points: `__init__.py`, `__main__.py`, `cli.py`](#1-entry-points-__init__py-__main__py-clipy)
+- [2. config.py — Settings + path resolution](#2-configpy--settings--path-resolution)
+- [3. agent/ — Agent core](#3-agent--agent-core)
+  - [3.1 agent/events.py](#31-agentevents.py)
+  - [3.2 agent/prompts.py](#32-agentpromptspy)
+  - [3.3 agent/subagents.py](#33-agentsubagentspy)
+  - [3.4 agent/permissions.py — make_can_use_tool](#34-agentpermissionspy--make_can_use_tool)
+  - [3.5 agent/todos.py — TodoStore](#35-agenttodospy--todostore)
+  - [3.6 agent/core.py — AgentRunner](#36-agentcorepy--agentrunner)
+- [4. ui/ — UI Protocol seam](#4-ui--ui-protocol-seam)
+  - [4.1 ui/base.py — AgentUI Protocol](#41-uibasepy--agentui-protocol)
+  - [4.2 ui/console.py — ConsoleAgentUI](#42-uiconsolepy--consoleagentui)
+  - [4.3 ui/prompts.py](#43-uipromptspy)
+- [5. outputs/ — Outputs detection + registry](#5-outputs--outputs-detection--registry)
+  - [5.1 outputs/observer.py — OutputsObserver](#51-outputsobserverpy--outputsobserver)
+  - [5.2 outputs/registry.py — OutputsRegistry](#52-outputsregistrypy--outputsregistry)
+- [6. kb/ + ingestion/ — Knowledge Base pipeline](#6-kb--ingestion--knowledge-base-pipeline)
+  - [6.1 ingestion/registry.py — KbRegistry](#61-ingestionregistrypy--kbregistry)
+  - [6.2 ingestion/profiler.py — kb_profiler subagent definition](#62-ingestionprofilerpy--kb_profiler-subagent-definition)
+  - [6.3 ingestion/runner.py — orchestrator](#63-ingestionrunnerpy--orchestrator)
+  - [6.5 KB ingestion sequence](#65-kb-ingestion-sequence)
+  - [6.6 Legacy (inactive — kept for backcompat, NOT imported)](#66-legacy-inactive--kept-for-backcompat-not-imported)
+- [7. server/ — FastAPI layer](#7-server--fastapi-layer)
+  - [7.1 server/app.py — Factory](#71-serverapppy--factory)
+  - [7.2 server/state.py — In-process state](#72-serverstatepy--in-process-state)
+  - [7.3 server/sse.py](#73-serverssespy)
+  - [7.4 server/schemas.py — Pydantic models](#74-serverschemaspython--pydantic-models)
+  - [7.5 server/scope.py — build_scope / render_scope](#75-serverscopepy--build_scope--render_scope)
+  - [7.6 server/attachments_registry.py](#76-serverattachments_registrypy)
+  - [7.7 server/web_ui.py — WebAgentUI](#77-serverweb_uipy--webagentui)
+  - [7.8 server/routes/ — Endpoint table](#78-serverroutes--endpoint-table)
+  - [7.9 server/replay.py — Session-history replay](#79-serverreplaypy--session-history-replay)
+  - [7.10 server/session_farm.py — per-session symlink farm](#710-serversession_farmpy--per-session-symlink-farm)
+- [8. SSE & Message turn — Flow tổng hợp](#8-sse--message-turn--flow-tổng-hợp)
+  - [8.1 Sequence: POST /sessions/{sid}/messages](#81-sequence-post-sessionssidmessages)
+  - [8.2 Inventory các SSE event được emit](#82-inventory-các-sse-event-được-emit)
+- [9. Crash recovery & restart safety](#9-crash-recovery--restart-safety)
+- [10. Map tóm tắt các seam mở rộng](#10-map-tóm-tắt-các-seam-mở-rộng)
+
+---
+
 ## 0. Tổng quan kiến trúc
 
 `da-agent-be` là một Excel data-analyst agent đặt trên Claude Agent SDK, triển khai dưới hai bề mặt sử dụng:
@@ -109,6 +153,13 @@ flowchart LR
   - `Settings` (dataclass slots):
     - Fields: `model`, `max_turns`, `plan_first`, `show_thinking`, `stream_responses`, `attachment_max_bytes` (100 MB), `scope_warn_bytes` (256 KB), `project_root`, `data_root`.
     - Properties (derived): `kb_dir`, `sessions_dir`, `outputs_dir`, `attachments_dir`, `skills_dir`. `workspace_dir` is retained as a deprecated property only — it is no longer in `add_dirs`, no longer created by `ensure_dirs`, and absent from the system prompt (spec §8.2 — all writes route through `outputs_dir` or `kb_dir/<id>/versions/` or `attachments_dir/<sid>/<att_id>/versions/`).
+    - Per-session accessors (thêm từ commit farm):
+      - `sessions_data_dir` (property) → `<data_root>/sessions-data/`
+      - `session_data_dir(sid)` → `<data_root>/sessions-data/<sid>/`
+      - `session_kb_dir(sid)` → `<data_root>/sessions-data/<sid>/kb/`
+      - `session_workspace_dir(sid)` → `<data_root>/sessions-data/<sid>/workspace/`
+      - `session_outputs_view_dir(sid)` → `<data_root>/sessions-data/<sid>/outputs/` — legacy alias dir; current code does NOT create this symlink (see §7.10).
+      - `outputs_session_dir(sid)` → `<data_root>/outputs/<sid>/` — canonical outputs root cho một session.
     - `ensure_dirs() -> None`.
 - **Điểm tinh tế**:
   - Env: `CLAUDE_CONFIG_DIR=str(sessions_dir)` được set trong `AgentRunner._build_options()`, **không** trong `Settings` — `Settings` chỉ expose path. Đồng thời FastAPI app lifespan (`server/app.py`) mirror cùng giá trị vào `os.environ` của parent process khi enter và restore khi exit, để `claude_agent_sdk.get_session_messages` (chạy trong parent process khi replay history) đọc đúng JSONL directory mà SDK subprocess ghi vào.
@@ -136,9 +187,14 @@ flowchart LR
 
 ### 3.3 `agent/subagents.py`
 
-- **Vai trò**: Định nghĩa 2 subagent specialization (`analyst`, `reporter`) — main agent dispatch qua tool `Task`. Riêng `kb_profiler` nằm ở `ingestion/profiler.py`, **KHÔNG** nằm trong `build_subagents()` (ingestion-only, không dispatch per-turn).
+- **Vai trò**: Định nghĩa 2 subagent specialization (`analyst`, `reporter`) — main agent dispatch qua tool `Agent` (commit `48a54ec`; lưu ý SDK transcript event names `TaskCreate`/`TaskUpdate`/`Task #N created successfully` là SDK-internal và KHÔNG thay đổi). Riêng `kb_profiler` nằm ở `ingestion/profiler.py`, **KHÔNG** nằm trong `build_subagents()` (ingestion-only, không dispatch per-turn).
 - **Public API**: `build_subagents() -> dict[str, AgentDefinition]`.
 - **Permissions**: `analyst` chỉ có read-only tools + xlsx skill; `reporter` có Write/Edit + xlsx/pptx/docx skills.
+- **Reporter prompt structure** (`subagents.py:75–126`) — 4 named sections:
+  1. **Target dispatch**: chọn skill `xlsx` / `pptx` / `docx` theo `resolved_target_kind` + extension; ghi ra `resolved_target_path` verbatim.
+  2. **Working-directory discipline**: `working_dir=` là scratch; `output_path=` là đường dẫn deliverable cuối — không dùng `/tmp`, không tự bịa đường dẫn.
+  3. **`output_path` writability**: harness đã mount parent dir vào sandbox. EROFS / EXDEV tại save time là code bug — KHÔNG fallback sang `cp` / `os.link` / `os.symlink`.
+  4. **Language preservation**: khi ngôn ngữ là tiếng Việt, giữ nguyên từng dấu diacritic (`Ngân hàng`, không phải `Ngan hang`); không transliterate, không strip tone marks, không normalize ASCII.
 
 ### 3.4 `agent/permissions.py` — `make_can_use_tool`
 
@@ -203,6 +259,14 @@ sequenceDiagram
   - `async send(prompt, *, echo_prompt=True)` — chạy một conversational turn.
   - `async set_plan_mode()` — re-enter plan mode cho turn tiếp theo.
 - **Resume seam**: `_build_options()` set `ClaudeAgentOptions(resume=self._resume_sdk_session_id)`. Khi non-None, SDK reuse JSONL transcript hiện có thay vì mint session mới; route layer truyền giá trị này từ `SessionMeta.sdk_session_id` để giữ liên tục transcript qua nhiều lần connect.
+- **`add_dirs` shape** (`core.py:188–211`) — hai path tuỳ theo context:
+  - **Web path** (`session_id` set): thư mục được mount vào SDK sandbox là:
+    ```python
+    [session_kb_dir(sid), session_workspace_dir(sid), outputs_session_dir(sid)]
+    ```
+    `outputs_session_dir(sid)` là `<data_root>/outputs/<sid>/` — canonical path, **KHÔNG** qua symlink alias. Symlink alias (`session_outputs_view_dir`) đã bị remove vì SDK sandbox từ chối (EROFS/EXDEV). Farm machinery tạo/cập nhật các thư mục này — xem §7.10.
+  - **CLI fallback** (`session_id is None`): legacy `[kb_dir, outputs_dir, attachments_dir]`.
+- **Skills** (`core.py:181`): `["xlsx", "data-analysis"]`. pptx/docx đã chuyển sang reporter subagent (xem §3.3).
 
 #### Sequence: `AgentRunner.send()`
 
@@ -319,7 +383,7 @@ sequenceDiagram
 
 ### 5.1 `outputs/observer.py` — `OutputsObserver`
 
-- **Vai trò**: Passive observer, observe Write/Edit/Bash tool calls để detect output files. Phase C session-scoped layout: chỉ accept paths dưới `outputs/<session_id>/<output_id>/<filename>`. Phân loại thành:
+- **Vai trò**: Passive observer, observe Write/Edit/Bash tool calls để detect output files. Flat layout: accept paths dưới `outputs/<session_id>/<filename>` (canonical `outputs_session_dir(sid)`). Phân loại thành:
   - `standalone` — applies cho cả 5 targets (`New .xlsx`, `New .pptx`, `New .docx`, `New sheet`, `Pick sheet`); kind metadata trong registry vẫn track `kb_version` / `attachment_version` cho UI grouping nhưng path luôn là session-scoped.
   - Legacy branches (`kb_dir/<kb_id>/versions/v<N>.xlsx`, `attachments/<sid>/<att_id>/versions/`) deprecated — `_classify` return None.
   - Ambiguous: bỏ qua.
@@ -354,21 +418,27 @@ flowchart TD
 
 - **Điểm tinh tế**:
   - `_fired` set guard chống duplicate emission khi SDK forward tool_result nhiều lần.
-  - Bash extraction: regex `_BASH_REDIR_RE` chỉ match patterns rõ ràng (`> path`, `--output=path`, `--output path`) — intentionally conservative.
+  - **Detection hai lượt**:
+    - **Pass 1 (regex)**: `_BASH_REDIR_RE` match các shell redirect rõ ràng, chỉ nhận absolute path bắt đầu `/`; negative-lookbehind loại bỏ FD redirect (`2>&1`, `1>…`, `>&1`):
+      ```
+      _BASH_REDIR_RE = re.compile(r"(?:(?<![\d&])>{1,2}\s*|--output[= ])(/[^\s;|&<>]+)")
+      ```
+    - **Pass 2 (dir-snapshot diff)**: chụp snapshot thư mục trước và sau tool_result; diff để bắt các file được tạo bởi python heredoc / `shutil.copy` / `wb.save()` — những trường hợp không có shell redirect.
+    - Cả hai pass đều chạy qua `_classify`, dùng `Path.resolve(strict=False)` để symlinked paths resolve về canonical inode.
   - Observer là sync; server wrap `on_detect` thành async bridge để register vào `OutputsRegistry` + emit SSE.
 
 ### 5.2 `outputs/registry.py` — `OutputsRegistry`
 
-- **Vai trò**: Persistent registry cho standalone outputs. Phase C layout (2026-05-31): `outputs/<session_id>/<output_id>/<filename>` + per-output `meta.json` sidecar. `registry.json` ở top-level `outputs_dir`; per-session dir tạo lazy lúc register.
+- **Vai trò**: Persistent registry cho standalone outputs. Layout (Phase A / flat): `outputs/<session_id>/<filename>` + hidden sidecar `.<output_id>.meta.json`. Collision-bump nếu tên trùng: `report.xlsx` → `report (2).xlsx`. `registry.json` ở top-level `outputs_dir`; per-session dir tạo lazy lúc register. (Layout system-level đầy đủ — xem `technical-spec.md §4`.)
 - **Public API**:
   - `OutputMeta(id, kind, title, filename, mime, size_bytes, source_session_id, source_kb_ids, created_at)`.
   - `OutputsRegistry(root)`: `load()`, `list(*, session_id?)`, `get(output_id)`, `register_standalone(..., session_id)`, `adopt_at(*, output_id, ...)`, `delete(output_id)`, `delete_session_outputs(session_id)`.
-  - `register_standalone(..., session_id)` — yêu cầu `session_id`; file land tại `outputs/<session_id>/<output_id>/<filename>`.
+  - `register_standalone(..., session_id)` — yêu cầu `session_id`; file land tại `outputs/<session_id>/<filename>`.
   - `delete_session_outputs(session_id)` — recursively remove `outputs/<session_id>/` + bulk-remove registry rows match `session_id`.
 - **Điểm tinh tế**:
   - Atomic write: flush dùng `.tmp` rồi `os.replace`.
   - `_lock = asyncio.Lock()` — mọi mutation serialize.
-  - `adopt_at()` dùng khi model write trực tiếp vào path `outputs_dir/<session_id>/out_<id>/<filename>` mà server chưa mint id đó — idempotent: id đã tồn tại thì trả existing row.
+  - `adopt_at()` dùng khi model write trực tiếp vào path `outputs_dir/<session_id>/<filename>` mà server chưa mint id đó — idempotent: id đã tồn tại thì trả existing row.
 
 ---
 
@@ -433,7 +503,7 @@ sequenceDiagram
 
 ### 6.6 Legacy (inactive — kept for backcompat, NOT imported)
 
-The following modules remain on disk but the active server does not import them. `server/routes/kb.py` imports from `...ingestion` only.
+The following modules remain on disk but the active server does not import them. `server/routes/kb.py` imports from `...ingestion` only. Active replacement: the memory-driven `ingestion/` pipeline (kb_profiler opus subagent) — see §6.1.
 
 #### `kb/registry.py` (legacy)
 
@@ -509,13 +579,12 @@ Older deterministic-pipeline registry. Superseded by `ingestion/registry.py`.
 
 | # | Điều kiện | HTTP 400 `detail.error` |
 |---|---|---|
-| 1 | `kb_scope == []` | `"kb_scope cannot be empty; omit the field for default-all"` |
-| 2 | `kb_id` không tồn tại | `"unknown kb_id: <id>"` |
-| 3 | `kb_id` tồn tại, status ≠ READY | `"kb <id> is in status <X>; only READY files can be scoped"` |
-| 4 | `attachment_id` trùng lặp | `"duplicate attachment_id"` |
-| 5 | `attachment_id` không tồn tại / file bị xóa | `"unknown attachment_id: <id>"` |
+| 1 | `kb_id` không tồn tại | `"unknown kb_id: <id>"` |
+| 2 | `kb_id` tồn tại, status ≠ READY | `"kb <id> is in status <X>; only READY files can be scoped"` |
+| 3 | `attachment_id` trùng lặp | `"duplicate attachment_id"` |
+| 4 | `attachment_id` không tồn tại / file bị xóa | `"unknown attachment_id: <id>"` |
 
-- **Default-all**: `kb_scope is None` → tất cả KB có `status == READY`.
+- **Default-empty**: `kb_scope: null` (omit) và `kb_scope: []` đều tương đương — cả hai produce empty `<scope>` block; BE không tự load READY KBs. FE phải list explicit `kb_id`s nếu muốn KB context.
 - **Soft-warn**: tổng `manifest_bytes > settings.scope_warn_bytes` → log WARNING, không raise.
 
 #### Render output shape
@@ -559,7 +628,7 @@ Short-term attachments (no manifest, read directly with xlsx skill):
 | POST | `/sessions` | 201 | sessions.py | |
 | GET | `/sessions/{sid}` | 200 / 404 | sessions.py | |
 | PATCH | `/sessions/{sid}` | 200 / 404 | sessions.py | rename |
-| DELETE | `/sessions/{sid}` | 204 / 404 | sessions.py | gọi `discard_runtime(sid)` |
+| DELETE | `/sessions/{sid}` | 204 / 404 | sessions.py | gọi `outputs.delete_session_outputs(sid)` + `discard_runtime(sid)` + `shutil.rmtree(session_data_dir(sid))` (xoá per-session farm) |
 | POST | `/sessions/{sid}/fork` | 201 / 404 | sessions.py | tạo child với `parent_id` |
 | POST | `/sessions/{sid}/messages` | 200 SSE / 400 / 404 | messages.py | StreamingResponse `text/event-stream` |
 | GET | `/sessions/{sid}/messages` | 200 / 404 | sessions.py | `MessageHistoryResponse(events: list[dict])`. Empty events nếu `sdk_session_id is None`. Đọc JSONL qua `claude_agent_sdk.get_session_messages(uuid)` (`directory=None` để scan mọi project dir) → `replay_to_events`. |
@@ -593,6 +662,19 @@ Short-term attachments (no manifest, read directly with xlsx skill):
   - `tool.result` ← `ToolResultBlock` embedded trong user role
   - `user.prompt` ← user role với str content
 - **Synthetic `result` events**: insert giữa các user-prompt boundary và một lần ở cuối — để FE reducer flip `inToolChain=false` và mark thinking blocks `done` (mirror live `ResultMessage` boundary). Payload `{turns, cost_usd: None, duration_s: 0.0}` vì historical run không lưu cost/duration.
+
+### 7.10 `server/session_farm.py` — per-session symlink farm
+
+- **Vai trò**: Gate quyền truy cập filesystem của SDK per turn. Mỗi session được cấp một "farm" gồm `kb/`, `workspace/`, và canonical `outputs/<sid>/` làm riêng — đây là permission gate hoạt động thực sự; `<scope>` prose block chỉ là hint cho model.
+- **Module**: 92 dòng tại `server/session_farm.py`.
+- **Hai hàm chính**:
+  - `prepare_session_root(settings, sid)` — idempotent mkdir `<sessions-data>/<sid>/{kb, workspace}` và `<outputs_dir>/<sid>/`. Nếu legacy symlink `session_outputs_view_dir(sid)` tồn tại, tears down ngay (symlink này không còn được tạo).
+  - `rebuild_kb_symlinks(settings, sid, scope_block)` — diff symlinks hiện có dưới `session_kb_dir(sid)` với desired set từ `scope_block.kb_entries`; `os.symlink` cho additions, `unlink` cho removals (chỉ unlink nếu entry là symlink — không xoá real dir).
+- **Lifecycle wire-in**:
+  - `routes/messages.py::post_message` gọi `prepare_session_root` TRƯỚC `build_scope`.
+  - `_stream_turn` gọi `rebuild_kb_symlinks` sau `_ensure_runner` và trước `runner.send(prompt)`, dưới `runtime.lock`.
+- **Lưu ý quan trọng**: `outputs_session_dir(sid)` (`<data_root>/outputs/<sid>/`) được list trực tiếp trong `add_dirs` — KHÔNG qua symlink. Legacy `session_outputs_view_dir` symlink bị SDK sandbox từ chối (EROFS/EXDEV cross-device) và đã bị remove.
+- **Cleanup**: `DELETE /sessions/<sid>` gọi `shutil.rmtree(session_data_dir(sid))` để xoá toàn bộ per-session farm.
 
 ---
 
@@ -718,6 +800,7 @@ Khi cần thêm tính năng mới, dùng bảng dưới đây để xác định
 | Endpoint mới | Tạo `routes/<topic>.py` với `APIRouter`; include trong `app.py`; schema vào `server/schemas.py`; nếu cần state mới — thêm field vào `AppState`. |
 | KB pipeline stage mới | Thêm function trong `kb/preprocess.py`; expose tunable nếu cần test monkey-patch; cập nhật `Manifest` dataclass. |
 | Validation rule cho `messages` | Mở rộng table trong `scope.build_scope` (ưu tiên fail-fast trước khi spawn runner). |
+| Per-session filesystem scope mới | Cập nhật `prepare_session_root` / `rebuild_kb_symlinks` trong `server/session_farm.py` (§7.10); nếu thêm thư mục mới, cũng cập nhật `add_dirs` trong `agent/core.py`. |
 
 ---
 

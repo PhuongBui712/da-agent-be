@@ -4,6 +4,80 @@
 
 ---
 
+## Table of Contents
+
+- [1. Mục tiêu & phạm vi](#1-mục-tiêu--phạm-vi)
+- [2. Information Architecture (sitemap)](#2-information-architecture-sitemap)
+- [3. Layout system](#3-layout-system)
+- [4. Screen catalog](#4-screen-catalog)
+  - [4.1 Chat screen](#41-chat-screen-sessionsid----default-landing)
+  - [4.2 KB Manager screen](#42-kb-manager-screen-kb)
+  - [4.3 Outputs screen](#43-outputs-screen-outputs)
+  - [4.4 Settings](#44-settings-settings----future-work)
+  - [4.5 Cross-screen navigation](#45-cross-screen-navigation)
+- [5. Left sidebar (cross-screen)](#5-left-sidebar-cross-screen)
+- [6. Main column — Chat screen](#6-main-column--chat-screen)
+  - [6.1 Session header (sticky top)](#61-session-header-sticky-top)
+  - [6.2 Message stream](#62-message-stream)
+  - [6.3 Composer](#63-composer)
+  - [6.4 Notice banner](#64-notice-banner)
+  - [6.5 Floating scroll-to-bottom](#65-floating-scroll-to-bottom)
+- [7. Message rendering — 5 types](#7-message-rendering--5-types)
+  - [7.1 Thinking message](#71-thinking-message-collapseexpand-font-nhỏ-hơn)
+  - [7.2 Tool call](#72-tool-call-collapse-per-call--collapse-cho-chain)
+  - [7.3 Interactive message](#73-interactive-message-modal-popup)
+  - [7.4 Text block](#74-text-block-no-collapse-direct)
+  - [7.5 Result message](#75-result-message-cuối-turn-font-nhỏ--mờ)
+  - [7.6 Special tool renderers](#76-special-tool-renderers)
+  - [7.7 Streaming text — delta accumulation](#77-streaming-text--delta-accumulation)
+- [8. Composer](#8-composer)
+- [9. Modals (interaction.requested rendering)](#9-modals-interactionrequested-rendering)
+  - [9.1 AskUserQuestion modal](#91-askuserquestion-modal)
+  - [9.2 ExitPlanMode modal](#92-exitplanmode-modal)
+  - [9.3 Output target picker](#93-output-target-picker-specialized-askuserquestion)
+  - [9.4 Reconnect — pending interactions](#94-reconnect--pending-interactions)
+  - [9.5 Sequential queue](#95-sequential-queue)
+  - [9.6 Reopen — load chat history](#96-reopen--load-chat-history)
+- [10. Right sidebar — Session resources](#10-right-sidebar--session-resources)
+  - [10.1 Card "Data Scope"](#101-card-data-scope)
+  - [10.2 Card "Attachments"](#102-card-attachments-per-session)
+  - [10.3 Card "Outputs"](#103-card-outputs-per-session)
+  - [10.4 Card "Todos"](#104-card-todos)
+  - [10.5 Card collapse persistence](#105-card-collapse-persistence)
+- [11. KB Manager screen (`/kb`)](#11-kb-manager-screen-kb)
+  - [11.1 Header](#111-header)
+  - [11.2 Table](#112-table)
+  - [11.3 Row click → drawer detail](#113-row-click--drawer-detail)
+  - [11.4 Re-sync action](#114-re-sync-action)
+  - [11.5 Empty state](#115-empty-state)
+  - [11.6 Deep-link KB detail](#116-deep-link-kb-detail)
+- [12. Outputs screen (`/outputs`)](#12-outputs-screen-outputs)
+  - [12.1 Filter chips](#121-filter-chips)
+  - [12.2 Table columns](#122-table-columns)
+  - [12.3 Row click → drawer detail](#123-row-click--drawer-detail)
+  - [12.4 Empty state](#124-empty-state)
+- [13. State catalog](#13-state-catalog)
+  - [13.1 KB status chips](#131-kb-status-chips)
+  - [13.2 Turn states (chat screen)](#132-turn-states-chat-screen)
+  - [13.3 Connection states](#133-connection-states)
+  - [13.4 Empty states (per screen/list)](#134-empty-states-per-screenlist)
+  - [13.5 Error states (validation + transport)](#135-error-states-validation--transport)
+- [14. Navigation & shortcuts](#14-navigation--shortcuts)
+  - [14.1 Routes](#141-routes)
+  - [14.2 Keyboard shortcuts](#142-keyboard-shortcuts)
+- [15. Flows](#15-flows)
+  - [15.1 Send message với scope + attachments](#151-send-message-với-scope--attachments)
+  - [15.2 Upload KB → preprocess → READY](#152-upload-kb--preprocess--ready)
+  - [15.3 AskUserQuestion modal lifecycle](#153-askuserquestion-modal-lifecycle)
+  - [15.4 ExitPlanMode flow](#154-exitplanmode-flow)
+  - [15.5 Output created → inline Download](#155-output-created--inline-download)
+  - [15.6 Reconnect với pending interaction](#156-reconnect-với-pending-interaction)
+  - [15.7 Fork session](#157-fork-session)
+- [16. Anti-patterns (UI-relevant, cite §13)](#16-anti-patterns-ui-relevant-cite-13)
+- [17. Open questions](#17-open-questions)
+
+---
+
 ## 1. Mục tiêu & phạm vi
 
 **User chính:** một analyst nội bộ, single-user, local tool [§2]. Người này upload `.xlsx` vào Knowledge Base (KB), hỏi câu hỏi từ lookup đơn giản tới multi-step inference, và nhận output dưới dạng file mới hoặc sheet thêm vào KB version [§1, §8.2].
@@ -238,7 +312,7 @@ Dải banner ngay phía trên composer (không phải toast). Chỉ xuất hiệ
 
 - **Reconnecting**: "Reconnecting to server…" — vàng, dismissible no.
 - **Disconnected**: "Disconnected. Retrying in {s}s." — đỏ, action "Retry now".
-- **Validation error 400** từ `POST /messages` [§8.5]: "Cannot send: {error message từ body}" — ví dụ `kb_scope cannot be empty; omit the field for default-all` — đỏ, dismiss được. Xem 5 rules ở §13.5.
+- **Validation error 400** từ `POST /messages` [§8.5]: "Cannot send: {error message từ body}" — ví dụ `unknown kb_id: <id>` — đỏ, dismiss được. Xem 5 rules ở §13.5.
 - **Pending interaction sau reconnect**: "You have an unanswered question from the agent." + button "Open" — mở queue modal.
 - **413 Payload Too Large** [§5.3]: hiển thị as toast (không banner) vì gắn với attempt cụ thể.
 
@@ -311,7 +385,7 @@ Quy tắc verbatim từ user request. Mỗi type bind chặt vào một SSE even
 
 | Tool | SSE source | Render target | Lý do KHÔNG dùng §7.2 |
 |---|---|---|---|
-| `Agent` (subagent dispatch — code base gọi là `Task`) | `tool.use` + `tool.result` | **Subagent lane** trong stream (§7.6.1) | Subagent là một mini-turn lồng nhau, không phải single shell call — cần khung visual khác để user thấy boundary |
+| `Agent` (subagent dispatch) | `tool.use` + `tool.result` | **Subagent lane** trong stream (§7.6.1) | Subagent là một mini-turn lồng nhau, không phải single shell call — cần khung visual khác để user thấy boundary |
 | `EnterPlanMode` | `tool.use` (no `can_use_tool` intercept — confirmed `permissions.py:43-47`) | **Plan banner** đầu turn (§7.6.2) | Là mode-switch silent, không có output bytes; render expand/collapse vô nghĩa |
 | `ExitPlanMode` | `interaction.requested` `kind="plan"` (intercepted) | **Modal** (§9.2) — ngoài stream | Đã spec ở §7.3 → §9.2, ghi lại để  hoàn cảnh group đầy đủ |
 | `Skill` (vd `Skill(name="xlsx")`) | `tool.use` + `tool.result` | **Skill chip** (§7.6.3) — slim row | Skill là "loaded capability", không có output đáng đọc; chỉ cần signal "đã invoke" |
@@ -494,7 +568,7 @@ Composer là single-card sticky bottom, layout 2 hàng:
 | Element | Behavior |
 |---|---|
 | `+` Attach | Open OS file picker. Trên drop: `POST /sessions/{sid}/attachments` (multipart) [§5.3, §11]. Multi-file allowed. |
-| KB Scope summary chip | Read-only chip hiển thị: "Scope: All READY KBs" (default) hoặc "Scope: 3 of 7 KBs" khi user check subset. Click → focus + scroll right sidebar đến card "Data Scope" (§10.1). |
+| KB Scope summary chip | Read-only chip hiển thị: "Scope: 0 KBs" khi không có gì được chọn, hoặc "Scope: N KBs" khi user tick N KB. Click → focus + scroll right sidebar đến card "Data Scope" (§10.1). |
 | Send | Primary button. Enabled khi: turn idle + input non-empty (sau trim) + tất cả attachments upload xong + không có modal mở. |
 | Mic (optional v2) | Voice input — ngoài scope MVP, hiển thị disabled. |
 
@@ -527,8 +601,8 @@ Composer là single-card sticky bottom, layout 2 hàng:
 // POST /sessions/{sid}/messages — body theo §8.5, §11
 {
   "prompt": "compare Q1 vs Q2",
-  "kb_scope": ["kb_123", "kb_456"]   // omit/null => default-all READY
-                                     // [] => 400 [§8.5 rule 1]
+  "kb_scope": ["kb_123", "kb_456"]   // omit/null/[] all equivalent => empty <scope> block.
+                                     // FE must list explicit kb_ids when KB context is wanted [§8.5].
   ,
   "attachments": [{ "attachment_id": "att_…" }]
 }
@@ -640,11 +714,8 @@ Stacked collapsible cards. Mỗi card collapse independent; trạng thái persis
     - `READY_PARTIAL` → checkable (enabled) với amber warning tooltip "Profiler incomplete — memory note unavailable; agent sẽ đọc raw.xlsx trực tiếp qua xlsx skill".
     - `FAILED` → "Preprocess failed — open KB Manager to retry"
 - **Footer:**
-  - Count line: "Scope: 3 of 7 READY KBs" (default-all hiển thị "Scope: All READY KBs (7)").
-  - Link "Reset to default (all)" — clear selection (= omit field trong request body, dùng default-all [§8.5]).
-- **Empty-scope warning:** khi user uncheck tất cả → footer chuyển sang warn:
-  - Text đỏ: "Empty scope is rejected with 400. Click 'Reset to default' to use all READY KBs, or pick at least one." [§8.5 rule 1].
-  - Composer cũng show validation banner cùng nội dung khi user submit.
+  - Count line: "Scope: N KBs" (where N = số kb_ids đang được tick).
+  - Link "Clear selection (= empty scope, no KB context)" — bỏ tick tất cả.
 
 ### 10.2 Card "Attachments" (per-session)
 
@@ -835,7 +906,7 @@ Mapping các 400 từ `POST /sessions/{sid}/messages` [§8.5 5 rules]:
 
 | Error body | UI cue |
 |---|---|
-| `kb_scope cannot be empty; omit the field for default-all` | Banner đỏ trên composer + warning trong card Scope (§10.1) |
+| `unknown kb_id: <id>` (stale id) | Banner đỏ trên composer; FE refresh `GET /kb/files` để loại id stale |
 | `unknown kb_id: <id>` | Banner đỏ; FE refresh `GET /kb/files` để loại id stale |
 | `kb <id> is in status <X>; only READY files can be scoped` | Banner đỏ; auto-uncheck kb đó trong card Scope |
 | `unknown attachment_id: <id>` | Banner đỏ; FE refresh `GET /sessions/{sid}/attachments`; xóa chip orphan |
@@ -1032,7 +1103,7 @@ sequenceDiagram
   participant U as User
 
   M->>SDK: tool_use Bash/xlsx (write file)
-  SDK->>FS: write outputs/<session_id>/<output_id>/<filename>
+  SDK->>FS: write outputs/<session_id>/<filename>
   SDK->>BE: forward tool_result
   BE->>BE: outputs.register(...) — read meta from FS, persist meta.json (§8.2)
   BE-->>FE: SSE output.created {output_id|kb_id+version, kind, title, download_url}
@@ -1084,7 +1155,7 @@ sequenceDiagram
   FE->>FE: route push /sessions/{new_session_id}
   FE->>FE: left sidebar Recents prepend new entry
   Note over FE: attachments KHÔNG copy [§5.3]; right sidebar Attachments empty
-  Note over FE: scope picker reset về default-all
+  Note over FE: scope picker reset về empty (0 KBs)
 ```
 
 ---
@@ -1095,7 +1166,7 @@ Mọi anti-pattern dưới đây đến từ `technical-spec §13` hoặc constr
 
 - **Render todo từ `tool.use` thay vì `todos.snapshot`** — race với apply state, row có thể hiện rồi biến mất nếu SDK không apply. Phải đợi `todos.snapshot` derived từ `tool_result` [§8.4 + §13].
 - **Cho check non-READY KB** — race với preprocess pipeline, memory note có thể chưa tồn tại hoặc đang bị rewrite. Phải grey out non-READY rows [§8.5 + §13].
-- **Treat `kb_scope:[]` là "no KBs"** — empty array bị backend reject với 400 [§8.5 rule 1, §13]. UI phải force user explicit (omit field cho default-all, hoặc tick ít nhất 1 KB).
+- **Hide the kb_scope chip vì "không có KB nào được chọn"** — empty/omitted/null đều = empty `<scope>` block (không còn 400). UI vẫn phải hiển thị chip ở state "0 KBs" để user chủ động opt-in [§8.5].
 - **Auto-resolve modal mà không user input** — defeats human-in-the-loop guarantee [§13, Golden Rule 5 §12]. Modal MUST chờ user submit hoặc dismiss; dismiss có semantic rõ (§9.1 / §9.2 dismiss flow).
 - **Hard-fail unknown SSE event** — phải no-op forward-compat clause [§11, §13]. Khi backend thêm event type mới, FE cũ vẫn chạy.
 - **Hardcode `ask_output_target` placeholder tool** — đã removed; output target dùng `AskUserQuestion` 2-question payload [§8.2 + §13]. FE chỉ render qua AskUserQuestion modal pipeline.
@@ -1116,7 +1187,7 @@ Mọi anti-pattern dưới đây đến từ `technical-spec §13` hoặc constr
 
 Lifted từ `technical-spec §14` + open question phát sinh trong design:
 
-1. **Scope size cap UI affordance** [§14, §8.5]: nếu user có 100 KB và default-all, `<scope>` block lớn. Có nên show UI warning "Scope is large ({N} files, ~{X} KB) — consider narrowing" trong card Scope không? Hard-cap byte size hay chỉ warn level (default 256 KB warn).
+1. **Scope size cap UI affordance** [§14, §8.5]: nếu user tick nhiều KB, `<scope>` block lớn. Có nên show UI warning "Scope is large ({N} files, ~{X} KB) — consider narrowing" trong card Scope không? Hard-cap byte size hay chỉ warn level (default 256 KB warn).
 2. **Attachment retention TTL hiển thị** [§14, §5.3, §8.5]: spec hỏi có cần per-attachment TTL hoặc size-based eviction. Nếu có, FE cần show "expires in N hours" trên chip — hiện chưa.
 3. **KB status SSE channel** [§14, §8.5]: hiện FE poll `GET /kb/files` mỗi 5s khi có row processing. Nếu backend push status transitions, có thể bỏ polling (tiết kiệm bandwidth + UX faster). Card Scope refresh nhanh hơn.
 4. **Output retention cleanup ai trigger** [§14, §8.2]: ai delete `~/.da-agent/outputs/` cũ? Auto theo TTL? Manual trong Outputs screen? UI cần "older than N days" filter và bulk delete?

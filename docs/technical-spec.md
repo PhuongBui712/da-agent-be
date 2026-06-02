@@ -6,6 +6,43 @@
 
 ---
 
+## Table of Contents
+
+- [1. Goal](#1-goal)
+- [2. Key Decisions](#2-key-decisions)
+- [3. Architecture](#3-architecture)
+- [4. Filesystem Layout](#4-filesystem-layout)
+- [5. Input & Ingestion](#5-input--ingestion)
+  - [5.1 Preprocessing Pipeline (kb_profiler subagent — memory-driven)](#51-preprocessing-pipeline-kb_profiler-subagent--memory-driven)
+    - [5.1.1 Algorithm details](#511-algorithm-details)
+    - [5.1.2 KB Profiler Endpoints](#512-kb-profiler-endpoints)
+  - [5.2 Edge Cases](#52-edge-cases)
+  - [5.3 Short-term attachments (chat upload)](#53-short-term-attachments-chat-upload)
+- [6. Session Persistence](#6-session-persistence)
+- [7. KB Management (CRUD)](#7-kb-management-crud)
+- [8. Agent Design](#8-agent-design)
+  - [8.1 Analyst Orchestration](#81-analyst-orchestration)
+  - [8.2 Output Handling](#82-output-handling)
+  - [8.3 Interactive User Loop (Plan & Question)](#83-interactive-user-loop-plan--question)
+  - [8.4 Todo List Streaming Pipeline](#84-todo-list-streaming-pipeline)
+  - [8.5 Per-turn Data Scope](#85-per-turn-data-scope)
+    - [8.5.1 Per-session symlink farm](#851-per-session-symlink-farm)
+  - [8.6 Streaming Output (token-level)](#86-streaming-output-token-level)
+  - [8.7 Session history loading & resume](#87-session-history-loading--resume)
+- [9. Frontend](#9-frontend)
+- [10. Tech Stack](#10-tech-stack)
+- [11. Core API Surface](#11-core-api-surface)
+- [12. Golden Rules](#12-golden-rules)
+- [13. Anti-Patterns](#13-anti-patterns)
+- [13.5 Security Model](#135-security-model)
+  - [Layer 1 — SDK Sandbox](#layer-1--sdk-sandbox)
+  - [Layer 2 — PreToolUse Bash hook + Permissions deny rules](#layer-2--pretooluse-bash-hook--permissions-deny-rules)
+  - [CORS](#cors)
+  - [Docker isolation](#docker-isolation)
+- [14. Open Questions](#14-open-questions)
+
+---
+
 ## 1. Goal
 
 An AI agent that ingests Excel files (1+ files, 1+ sheets), understands schema and cross-sheet relationships, answers questions from trivial lookups to multi-step inference, produces new artifacts (tables, charts, sheets), and runs an end-to-end Senior Data Analyst workflow. Built on the **Claude Agent SDK** with the **xlsx** skill, persisting everything to the **local filesystem**.
@@ -21,7 +58,7 @@ An AI agent that ingests Excel files (1+ files, 1+ sheets), understands schema a
 | Sessions | SDK **default local JSONL** (`CLAUDE_CONFIG_DIR → ~/.da-agent/sessions`) | No Postgres, no custom adapter |
 | Code execution | SDK local runtime (optional single Docker container for isolation) | No pool — local + local-JSONL removes the multi-host rationale |
 | KB preprocessing | **Opus subagent (`kb_profiler`)** → markdown memory note per file | No queue/broker; agent reads memory note not raw bytes |
-| Output target | New `.xlsx` / New `.pptx` / New `.docx` (standalone) · New sheet · Pick sheet (KB-bound) | Agent **asks when ambiguous**; all writes under `outputs/<session_id>/<output_id>/` |
+| Output target | New `.xlsx` / New `.pptx` / New `.docx` (standalone) · New sheet · Pick sheet (KB-bound) | Agent **asks when ambiguous**; all writes under `outputs/<session_id>/` (flat, see §4) |
 | Google Sheets | CRUD via Sheets API (OAuth) | Import as KB / export results |
 
 ---
@@ -33,7 +70,7 @@ flowchart TB
   FE["Web Frontend<br/>(Next.js)"] -->|REST + SSE| API["Backend API<br/>(FastAPI, local)"]
   FE -->|"multipart upload<br/>(chat attachments)"| API
 
-  API --> ORCH["Agent SDK<br/>(orchestrator + xlsx / pptx / docx / data-analysis skills)"]
+  API --> ORCH["Agent SDK<br/>(orchestrator + xlsx / data-analysis;<br/>reporter subagent has pptx / docx)"]
   API --> BG["Background task<br/>(preprocess)"]
 
   ORCH -->|reads/writes| FS[("~/.da-agent<br/>kb/ · sessions/ · attachments/ · outputs/")]
@@ -66,15 +103,18 @@ flowchart TB
 ├── agent-memory/
 │   └── kb_profiler/
 │       └── <kb_id>.md            # kb_profiler memory note (replaces deprecated manifest.json)
-├── outputs/                      # standalone artifacts not bound to any KB
+├── outputs/                      # standalone artifacts not bound to any KB (Phase A — flat)
 │   ├── registry.json             # global output registry
 │   └── <session_id>/
-│       └── <output_id>/
-│           ├── <filename>        # model-supplied; filename-only shown in chat
-│           └── meta.json
+│       ├── <filename>            # model-supplied; collision-bumped (e.g. report.xlsx, report (2).xlsx)
+│       └── .<output_id>.meta.json # hidden sidecar, one per file
 ├── attachments/                  # short-term per-session uploads (chat composer)
 │   └── <session_id>/
 │       └── <att_id>/<filename>
+├── sessions-data/                # per-session farm rooting `add_dirs` (see §8.5.1)
+│   └── <session_id>/
+│       ├── kb/                   # symlinks to scoped kb/<kb_id>/ entries (rebuilt per turn)
+│       └── workspace/            # scratch dir for the agent
 └── sessions/                     # SDK JSONL transcripts (CLAUDE_CONFIG_DIR)
     └── projects/<project>/<session_id>.jsonl
 ```
@@ -171,7 +211,7 @@ Files dropped into the chat composer are uploaded once and live for the lifetime
 
 **Storage:** `~/.da-agent/attachments/<session_id>/<att_id>/<filename>`. The `<att_id>` directory isolates filename collisions (two `report.xlsx` uploads coexist).
 
-**Lifetime:** tied to the session — deleted when `DELETE /sessions/{sid}` is called; also wipes `outputs/<sid>/` recursively. Forking a session (`POST /sessions/{sid}/fork`) does NOT copy attachments; the fork starts empty (parent's attachments would otherwise drift between branches).
+**Lifetime:** tied to the session — deleted when `DELETE /sessions/{sid}` is called; also wipes `outputs/<sid>/` recursively, plus the per-session farm `<sessions-data>/<sid>/`. Forking a session (`POST /sessions/{sid}/fork`) does NOT copy attachments; the fork starts empty (parent's attachments would otherwise drift between branches).
 
 **How the agent sees them:** the attachment file lives on the SDK's `add_dirs` (per-session, see §8.5). The agent reads it the same way it reads any file in its working directory. No manifest is generated; the model uses the xlsx skill on demand.
 
@@ -251,37 +291,48 @@ No `mirror_error` concerns, no compaction-vs-raw split to manage at the storage 
 
 ### 8.1 Analyst Orchestration
 
+Main agent acts as an **orchestrator**. For any Phase-6 deliverable (`.xlsx` workbook, `.pptx` deck, `.docx` report), the main agent MUST dispatch via the `Agent` tool to the `reporter` subagent — direct production by the main agent is forbidden. Quick-answer / clarifying replies that produce no standalone deliverable bypass the reporter.
+
 ```mermaid
 flowchart TB
-  U["User question"] --> M["Main Agent"]
+  U["User question"] --> M["Main Agent (orchestrator)"]
   M --> PM{"Complex /<br/>open-ended?"}
-  PM -->|"No"| Q["Direct: code → answer"]
+  PM -->|"No (answer-only)"| Q["Direct: code → answer"]
+  PM -->|"Phase-6 deliverable"| RPT["Agent(reporter, working_dir, output_path, user_prompt)"]
   PM -->|"Yes"| PLAN["Enter Plan Mode<br/>(propose investigation plan)"]
   PLAN --> APPROVE{"User approves?"}
   APPROVE -->|"edit"| PLAN
   APPROVE -->|"yes"| FAN["Dispatch subagents"]
 
   FAN --> S1["analyst (sonnet)<br/>data-analysis phase"]
-  FAN --> S2["reporter (sonnet)<br/>charts, pivot tables, synthesis<br/>(formerly visualizer)"]
+  FAN --> S2["reporter (sonnet)<br/>charts, pivot tables, synthesis<br/>(writes .xlsx / .pptx / .docx)"]
   S1 & S2 --> SYN["Main Agent: synthesize insights"]
-  SYN --> OUT["Output handler"]
+  SYN --> RPT
+  RPT --> OUT["Output handler"]
 ```
 
-> Note: `kb_profiler` is **ingestion-only** (§5.1), NOT dispatched per-turn. Per-turn fan-out is just `analyst` + `reporter`.
+**Delegation contract.** Every `Agent` tool call dispatching to `reporter` MUST embed the following four fields in its `prompt` argument:
+
+1. `working_dir=<absolute path under session_workspace_dir>` — scratch directory for intermediate files.
+2. `output_path=<resolved_target_path>` — REQUIRED for `reporter`; forbidden on `profiler` / `analyst`.
+3. The user's ORIGINAL `<user_prompt>` body verbatim (with all diacritics intact — see §8.2 language preservation).
+4. Output language rule — write in the same language as the user prompt.
+
+> Note: `kb_profiler` is **ingestion-only** (§5.1), NOT dispatched per-turn. Per-turn fan-out is just `analyst` + `reporter` (both built via `build_subagents()`).
 
 ### 8.2 Output Handling
 
-When the agent is about to produce a file, it must decide *where* the bytes land. If the target is unambiguous from the user's last message ("save it as a new file") the agent writes directly. Otherwise it asks — using the same `AskUserQuestion` pipeline defined in §8.3 (no bespoke clarification tool; the placeholder `ask_output_target` is removed).
+When the agent is about to produce a file, it must decide *where* the bytes land. If the target is unambiguous from the user's last message ("save it as a new file") the resolved path is passed to the `reporter` subagent (see §8.1) — the main agent does NOT write Phase-6 deliverables itself. Quick-answer artifacts produced inline (e.g. a single CSV summary in conversation) MAY be written directly, but the canonical path for any standalone `.xlsx` / `.pptx` / `.docx` deliverable is reporter dispatch. When the target is ambiguous, the agent asks — using the same `AskUserQuestion` pipeline defined in §8.3 (no bespoke clarification tool; the placeholder `ask_output_target` is removed).
 
 **Three targets, three filesystem destinations:**
 
 | Option label (≤12 char) | Description shown to user | Filesystem destination | Constraints |
 |---|---|---|---|
-| `New .xlsx` | Download a fresh standalone file | `~/.da-agent/outputs/<session_id>/<output_id>/<filename>` | No source KB needed. |
-| `New .pptx` | Download a fresh standalone presentation | `~/.da-agent/outputs/<session_id>/<output_id>/<filename>` | No source KB needed. |
-| `New .docx` | Download a fresh standalone document | `~/.da-agent/outputs/<session_id>/<output_id>/<filename>` | No source KB needed. |
-| `New sheet` | Append a new sheet to a source KB file | `~/.da-agent/outputs/<session_id>/<output_id>/<filename>` (output is tagged `kind=kb_version` for UI grouping; the kb_version observer branch is deprecated and returns None) | Requires picking a `kb_id`. Must not collide with an existing sheet name in that file. |
-| `Pick sheet` | Overwrite/append into an existing sheet of a source KB file | `~/.da-agent/outputs/<session_id>/<output_id>/<filename>` (output is tagged `kind=kb_version` for UI grouping) | Requires picking a `kb_id` *and* a sheet name from that file's memory note. |
+| `New .xlsx` | Download a fresh standalone file | `~/.da-agent/outputs/<session_id>/<filename>` (+ hidden `.<output_id>.meta.json` sidecar) | No source KB needed. |
+| `New .pptx` | Download a fresh standalone presentation | `~/.da-agent/outputs/<session_id>/<filename>` (+ hidden `.<output_id>.meta.json` sidecar) | No source KB needed. |
+| `New .docx` | Download a fresh standalone document | `~/.da-agent/outputs/<session_id>/<filename>` (+ hidden `.<output_id>.meta.json` sidecar) | No source KB needed. |
+| `New sheet` | Append a new sheet to a source KB file | `~/.da-agent/outputs/<session_id>/<filename>` (output is tagged `kind=kb_version` for UI grouping; the kb_version observer branch is deprecated and returns None) | Requires picking a `kb_id`. Must not collide with an existing sheet name in that file. |
+| `Pick sheet` | Overwrite/append into an existing sheet of a source KB file | `~/.da-agent/outputs/<session_id>/<filename>` (output is tagged `kind=kb_version` for UI grouping) | Requires picking a `kb_id` *and* a sheet name from that file's memory note. |
 
 `raw.xlsx` is never touched. KB-bound options always copy the latest version (latest `vN.xlsx`, or `raw.xlsx` if no versions yet) into a fresh `v<N+1>.xlsx`, then mutate inside the copy — Golden Rule 4.
 
@@ -336,12 +387,25 @@ If validation fails, the backend returns `PermissionResultDeny(message="invalid 
 
 **Output registration:**
 
-After the agent finishes writing, a backend tool-observer (same pattern as `TodoStore` in §8.4) detects the write site and calls `outputs.register(...)`:
+After the agent finishes writing, a backend tool-observer (same pattern as `TodoStore` in §8.4) detects the write site and calls `outputs.register(...)`. The observer runs in **two passes**:
 
-- For `New .xlsx` / `New .pptx` / `New .docx`: mints `output_id = out_<ulid>`, writes file under `outputs/<session_id>/<output_id>/<filename>`, writes `meta.json`, emits SSE.
-- For `New sheet` / `Pick sheet`: also routes to `outputs/<session_id>/<output_id>/<filename>` (NOT `kb/<kb_id>/versions/` directly — the `kb_version` observer branch is deprecated and returns `None`). The output is still tagged `kind=kb_version` in metadata for UI grouping. The download URL routes through the standard outputs endpoint.
+1. **Bash-redirect regex** — matches absolute output paths in shell command strings:
 
-**`outputs/<session_id>/<output_id>/meta.json` schema:**
+   ```
+   _BASH_REDIR_RE = re.compile(
+       r"(?:(?<![\d&])>{1,2}\s*|--output[= ])(/[^\s;|&<>]+)"
+   )
+   ```
+
+   The negative-lookbehind `(?<![\d&])` rejects FD redirects (`2>&1`, `1>...`, `>&1`, `&>file`); only matches absolute paths starting `/`.
+2. **Directory-snapshot diff** — before/after each tool result, snapshot `outputs/<sid>/` and diff. Catches python-heredoc / `shutil.copy` / `wb.save()` writes that have no shell redirect.
+
+Both passes converge on `_classify`, which uses `Path.resolve(strict=False)` so paths through symlinks resolve to a canonical inode.
+
+- For `New .xlsx` / `New .pptx` / `New .docx`: mints `output_id = out_<ulid>`, writes file under `outputs/<session_id>/<filename>` (collision-bumped), writes hidden sidecar `.<output_id>.meta.json`, emits SSE.
+- For `New sheet` / `Pick sheet`: also routes to `outputs/<session_id>/<filename>` (NOT `kb/<kb_id>/versions/` directly — the `kb_version` observer branch is deprecated and returns `None`). The output is still tagged `kind=kb_version` in metadata for UI grouping. The download URL routes through the standard outputs endpoint.
+
+**`outputs/<session_id>/.<output_id>.meta.json` schema:**
 
 ```jsonc
 {
@@ -349,7 +413,7 @@ After the agent finishes writing, a backend tool-observer (same pattern as `Todo
   "session_id": "sess_…",              // session this output belongs to (path component)
   "kind": "standalone",                // "standalone" | "kb_version"
   "title": "Q1 sales summary",         // model-supplied or filename-derived
-  "filename": "Q1_sales_summary.xlsx", // on disk under outputs/<session_id>/<output_id>/
+  "filename": "Q1_sales_summary.xlsx", // on disk under outputs/<session_id>/ (flat, collision-bumped)
   "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "size_bytes": 18422,
   "source_session_id": "sess_…",       // session that produced it
@@ -395,9 +459,9 @@ sequenceDiagram
   SDK-->>M: tool_result with answers
 
   M->>SDK: tool_use Bash/xlsx (writes file)
-  SDK-->>FS: write under outputs/<session_id>/<output_id>/<filename>
+  SDK-->>FS: write under outputs/<session_id>/<filename>
   SDK->>BE: forward tool_result
-  BE->>BE: outputs.register(...) — read meta from FS, persist meta.json
+  BE->>BE: outputs.register(...) — read meta from FS, persist .<output_id>.meta.json sidecar
   BE-->>FE: SSE output.created {output_id|kb_id+version, kind, title, download_url}
   FE->>FE: render "Download" link in chat
 ```
@@ -642,7 +706,7 @@ A **deletion** is conveyed implicitly: the next snapshot omits the row. The fron
 
 The agent does not operate over "all files on disk". Each turn carries an explicit **scope** assembled by the frontend and validated by the backend. Scope has two channels:
 
-- **KB scope** — a list of KB ids the user has ticked on the chat screen. Default (omitted/null) = **all KB files with status=READY**. Files in non-READY status are never reachable in this turn even if their id is supplied.
+- **KB scope** — a list of KB ids the user has ticked on the chat screen. `null` / omitted is **identical to `[]`** — both produce an empty `<scope>` block. The backend never silently auto-loads READY KBs; the frontend MUST list explicit kb_ids if it wants KB context.
 - **Attachments** — short-term files uploaded for this session via §5.3. The user picks which attachments come along on this turn.
 
 **KB lifecycle status** (now an explicit field on `GET /kb/files`):
@@ -662,33 +726,34 @@ The frontend disables (greys out) checkboxes for non-READY rows and shows the st
 ```jsonc
 {
   "prompt": "compare Q1 vs Q2 and chart the delta",
-  // OPTIONAL. Omitted or null → all READY KB files (default-all).
-  // Empty array → 400 (use omission, not [], to mean "default-all"; see edge cases).
+  // OPTIONAL. Omitted, null, and [] are all treated identically → empty <scope> block.
+  // The backend never auto-loads READY KBs; FE must list explicit ids if it wants KB context.
   "kb_scope": ["kb_123", "kb_456"],
   // OPTIONAL. Omitted or null → no short-term attachments injected this turn.
   "attachments": [{"attachment_id": "att_01HRZ…"}]
 }
 ```
 
-Both new fields are **optional** — existing clients that send only `{prompt}` keep working (default-all KB, no attachments). This is the only backwards-compat surface.
+Both new fields are **optional** — existing clients that send only `{prompt}` keep working (no KB context, no attachments).
 
 **Validation rules** (executed before the SDK is started for the turn):
 
 | Rule | Status | Body |
 |---|---|---|
-| `kb_scope` is `[]` (empty array) | `400` | `{"error": "kb_scope cannot be empty; omit the field for default-all"}` |
 | `kb_scope` references unknown id | `400` | `{"error": "unknown kb_id: <id>"}` |
 | `kb_scope` references non-READY id | `400` | `{"error": "kb <id> is in status <X>; only READY files can be scoped"}` |
 | `attachments[].attachment_id` not found in this session | `400` | `{"error": "unknown attachment_id: <id>"}` |
 | Same `attachment_id` twice | `400` | `{"error": "duplicate attachment_id"}` |
 
+**Operative gate — per-session symlink farm.** The actual permission boundary is the filesystem layer rebuilt per turn: only the kb_ids in `kb_scope` get symlinks under `<sessions-data>/<sid>/kb/`, and the SDK's `add_dirs` roots at that directory (see §8.5.1 for the full mechanism). The `<scope>` prose block (below) is now **redundant** with the filesystem layer — it is still injected for transparency, replayability, and subagent visibility, but the symlink farm is what the SDK can actually see.
+
 **Injection mechanism — prepended scope block:**
 
 `AgentRunner.send` builds a per-turn context block and prepends it to the user prompt before calling `client.query()`. Reasons:
 
-1. The SDK's `add_dirs` is constructor-time today; rebuilding per turn requires either restarting the client or relying on undocumented dynamics.
-2. The context block lands in the local JSONL transcript — debuggable, replayable, visible to subagents.
-3. KB memory notes are tiny (Golden Rule 1: memory note in, code-pushdown out) — the cost of including N of them per turn is bounded.
+1. The context block lands in the local JSONL transcript — debuggable, replayable, visible to subagents.
+2. KB memory notes are tiny (Golden Rule 1: memory note in, code-pushdown out) — the cost of including N of them per turn is bounded.
+3. The model gets a labelled list of which KBs it should consult, even though the filesystem layer would already deny anything else.
 
 The block is composed as:
 
@@ -707,9 +772,9 @@ compare Q1 vs Q2 and chart the delta
 </user_prompt>
 ```
 
-When `kb_scope` is omitted/null, the block lists every READY KB. When `attachments` is omitted/null, the second sub-list is omitted. The system prompt (`build_system_prompt`) instructs the model that anything not in the `<scope>` block is off-limits for this turn.
+When `kb_scope` is omitted / null / `[]`, the `<scope>` block is empty. When `attachments` is omitted/null, the second sub-list is omitted. The system prompt (`build_system_prompt`) instructs the model that anything not in the `<scope>` block is off-limits for this turn.
 
-**`add_dirs` strategy:** the SDK still gets `add_dirs=[kb_dir, attachments_dir/<sid>, outputs_dir]` at construction time so the filesystem is *reachable*. `workspace_dir` is **excluded from `add_dirs`** (deprecated). The scope block is what *bounds* the model's attention. This separation matters: a model that ignores the scope instruction still cannot write to a KB outside scope (the can_use_tool / Golden-Rule-4 layer prevents it), but it also cannot read other KBs because the scope tells it which memory-note paths to consult — the others are never named.
+**`add_dirs` strategy:** see §8.5.1 — `add_dirs` roots at the per-session symlink farm, not at the global `kb_dir`. `workspace_dir` is **excluded from `add_dirs`** (deprecated).
 
 **Sequence — message turn with explicit scope:**
 
@@ -738,12 +803,53 @@ sequenceDiagram
 
 | Case | Handling |
 |---|---|
-| `kb_scope: []` | `400` (see validation table). Empty list is ambiguous — force the client to be explicit. |
-| `kb_scope` field absent vs. `kb_scope: null` | Both treated as default-all. |
+| `kb_scope: []` | Valid — empty `<scope>` block; agent runs with no KB context. |
+| `kb_scope` field absent vs. `kb_scope: null` vs. `kb_scope: []` | All three are identical (empty `<scope>`). |
 | User checks a KB, FE sends turn, KB transitions READY → FAILED mid-turn | Validated at turn start; mid-turn transitions are not detected. Acceptable — reprofile re-runs are not destructive (overwrite `<kb_id>.md` memory note; agent re-reads on next turn). |
-| Scope changes between turns of the same session | Allowed — each turn has its own `<scope>` block. The transcript records both. |
-| Very large scope (e.g. 100 KBs default-all) | Manifests are bounded per Golden Rule 1, but the assembled block can still be sizable. Soft cap: log a warning if total manifest bytes >`scope_warn_bytes` (default 256 KB). Hard cap is an open question (§14). |
+| Scope changes between turns of the same session | Allowed — each turn rebuilds its own `<scope>` block AND symlink farm (§8.5.1). The transcript records both. |
+| Very large scope (e.g. 100 KBs) | Manifests are bounded per Golden Rule 1, but the assembled block can still be sizable. Soft cap: log a warning if total manifest bytes >`scope_warn_bytes` (default 256 KB). Hard cap is an open question (§14). |
 | Attachment referenced but not on disk (race with delete) | Treated like unknown attachment_id → `400`. |
+
+### 8.5.1 Per-session symlink farm
+
+The operative permission gate for KB scope is a per-session filesystem layout under `<data_root>/sessions-data/<sid>/`, rebuilt each turn by `src/da_agent/server/session_farm.py` (~92 lines). The SDK's `add_dirs` roots at this farm; what isn't symlinked in is unreachable.
+
+**Path layout:**
+
+```
+<data_root>/sessions-data/<session_id>/
+├── kb/                  # symlinks to scoped kb/<kb_id>/ entries (one per scoped id)
+└── workspace/           # scratch dir for the agent
+```
+
+Note: `outputs/` is NOT a sibling here. The canonical outputs dir lives at `<data_root>/outputs/<sid>/` and is mounted into `add_dirs` directly — see the closing note below for why the alias was removed.
+
+**`add_dirs` shape** (`agent/core.py:188-211`):
+
+```python
+# Web path (session_id set):
+add_dirs = [
+    session_kb_dir(sid),         # <data_root>/sessions-data/<sid>/kb/
+    session_workspace_dir(sid),  # <data_root>/sessions-data/<sid>/workspace/
+    outputs_session_dir(sid),    # <data_root>/outputs/<sid>/   (canonical, not aliased)
+]
+
+# CLI fallback (session_id is None):
+add_dirs = [kb_dir, outputs_dir, attachments_dir]
+```
+
+**Lifecycle:**
+
+| Function | When | Behavior |
+|---|---|---|
+| `prepare_session_root(settings, sid)` | `routes/messages.py::post_message`, BEFORE `build_scope` | Idempotent mkdir of `<sessions-data>/<sid>/{kb,workspace}` plus the canonical `<outputs_dir>/<sid>/`. Tears down any stale legacy `<sessions-data>/<sid>/outputs/` symlink. |
+| `rebuild_kb_symlinks(settings, sid, scope_block)` | `routes/messages.py::_stream_turn`, after `_ensure_runner` and before `runner.send(prompt)`, under `runtime.lock` | Diffs existing symlinks under `session_kb_dir(sid)` vs. desired set from `scope_block.kb_entries`. `os.symlink` for additions, `unlink` for removals (only if entry is a symlink — never wipes a real dir). |
+
+**Why symlinks-as-gate.** The SDK's `add_dirs` is the operative permission gate. A model that ignores the `<scope>` prose still cannot reach a KB whose symlink isn't in the farm. The `<scope>` block (§8.5) is now redundant with the filesystem layer; it is retained for transparency.
+
+**Why `outputs/` is mounted canonically, not aliased through sessions-data.** Earlier drafts placed `outputs/` as a sibling symlink under `<sessions-data>/<sid>/`. The SDK sandbox follows symlinks and rejected writes through the alias as cross-device (`EROFS` / `EXDEV`) — a future maintainer must NOT reintroduce the alias without solving that.
+
+**File reference:** `src/da_agent/server/session_farm.py`.
 
 ---
 
@@ -974,7 +1080,8 @@ Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via S
 | Layer | Choice |
 |---|---|
 | Agent / Backend | Python, **Claude Agent SDK**, FastAPI |
-| Skills | Anthropic **xlsx** / **pptx** / **docx** / **data-analysis** skills (pandas, openpyxl, python-pptx, python-docx, etc.) |
+| Skills (main agent) | Anthropic **xlsx** + **data-analysis** (pandas, openpyxl). The `pptx` and `docx` skills moved to the `reporter` subagent (see §8.1) so the main agent doesn't self-trigger deck/report production. |
+| Skills (reporter subagent) | **xlsx** + **pptx** + **docx** (pandas, openpyxl, python-pptx, python-docx). |
 | Execution | SDK local runtime (optional single Docker container for isolation) |
 | Storage | Local filesystem `~/.da-agent` |
 | Sessions | SDK default local JSONL (`CLAUDE_CONFIG_DIR`) |
@@ -1006,11 +1113,11 @@ Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via S
 | POST | `/sessions/{id}/interactions/{tool_use_id}/respond` | Resolve a paused interaction (`AskUserQuestion` answers or `ExitPlanMode` verdict) |
 | GET | `/sessions/{id}/interactions/pending` | List unresolved interactions (used on reconnect/refresh to re-render modals) |
 | POST | `/sessions/{id}/fork` | Fork |
-| DELETE | `/sessions/{id}` | Delete session; recursively removes `attachments/<sid>/` AND `outputs/<sid>/` |
+| DELETE | `/sessions/{id}` | Delete session; recursively removes `attachments/<sid>/` AND `outputs/<sid>/` + `<sessions-data>/<sid>/` (per-session farm) |
 | GET  | `/outputs` | List standalone outputs (kind=standalone). Query: `?session_id=…` filter (default: filter by current session; toggle "All sessions" to omit filter). |
-| GET  | `/outputs/{output_id}` | Download standalone file (streams `outputs/<session_id>/<output_id>/<filename>`). |
+| GET  | `/outputs/{output_id}` | Download standalone file (streams `outputs/<session_id>/<filename>`; resolves via `.<output_id>.meta.json` sidecar). |
 | GET  | `/outputs/{output_id}/meta` | Return `meta.json` for a standalone output. |
-| DELETE | `/outputs/{output_id}` | Remove `outputs/<session_id>/<output_id>/`. |
+| DELETE | `/outputs/{output_id}` | Remove the file at `outputs/<session_id>/<filename>` and its `.<output_id>.meta.json` sidecar. |
 | GET  | `/kb/files/{kb_id}/versions` | List versions (`v2`, `v3`, …) with sidecar meta. |
 | GET  | `/kb/files/{kb_id}/versions/{version}/download` | Download a specific KB version (used as the download URL for `kind=kb_version` outputs). |
 
@@ -1035,11 +1142,11 @@ Simple local web app. Suggested: **Next.js + React + Tailwind**, streaming via S
 - ❌ Auto-resolving `AskUserQuestion` / `ExitPlanMode` without user input (defeats the human-in-the-loop guarantee — see §8.3 and Golden Rule 5).
 - ❌ Rendering todo rows from `tool.use` events alone — wait for the `todos.snapshot` derived from the matching `tool_result` (see §8.4).
 - ❌ Hardcoding a placeholder tool like `ask_output_target` instead of `AskUserQuestion` (breaks the §8.3 pipeline; FE has no modal for it).
-- ❌ Writing standalone outputs anywhere other than `~/.da-agent/outputs/<session_id>/<output_id>/` (frontend download URL becomes guesswork).
+- ❌ Writing standalone outputs anywhere other than `~/.da-agent/outputs/<session_id>/` (Phase A flat layout — see §4; frontend download URL becomes guesswork otherwise).
 - ❌ Mutating an existing `v<N>.xlsx` in place when adding/overwriting a sheet — always copy → `v<N+1>.xlsx` (preserves the non-destructive chain from Golden Rule 4).
 - ❌ Letting the user check a KB whose status is not `READY` (race with the §5.1 preprocess pipeline — memory note may not exist yet, or may be rewritten by reprofile under the agent's feet).
-- ❌ Treating `kb_scope: []` as "no KBs in scope" — empty list is rejected with `400`; "no KBs" is expressed by sending only attachments (with all KBs unticked through an explicit subset).
-- ❌ Per-turn rebuilding of the SDK's `add_dirs` to enforce scope — use the `<scope>` system block instead (debuggable, replayable, no SDK lifecycle churn).
+- ❌ Main agent producing `.pptx` / `.docx` deliverables directly. Phase-6 deliverables MUST be dispatched to the `reporter` subagent (see §8.1). The main agent's skill set is intentionally cut to `xlsx + data-analysis` (§10) so this footgun is hard to hit accidentally.
+- ❌ Reporter falling back to `cp` / `os.link` / `os.symlink` / `ctypes` rename when `output_path` save fails. The harness mounts `output_path`'s parent directory directly into the sandbox; an `EROFS` / `EXDEV` is a code bug (typo in path, wrong open mode, leftover tempfile collision), not a sandbox restriction. The reporter prompt forbids these fallbacks (§8.1; reporter prompt body in module-explanation §3.3).
 
 ---
 
@@ -1077,7 +1184,7 @@ Defined in `agent/security.py::build_sandbox_settings`:
 - Google Sheets auth flow for a local single user (loopback OAuth vs. service account).
 - Interaction state durability (§8.3): `InteractionStore` is in-memory; should pending interactions survive a backend restart, or is reload-and-resume sufficient for a single-user tool?
 - Todo overlay row cap (§8.4): is a fixed cap (default 8) acceptable, or should the overlay scroll/collapse instead?
-- Scope size cap (§8.5): the soft-warn cap (`scope_warn_bytes`, default 256 KiB) ships and emits a log warning when exceeded; whether to add a hard byte cap that rejects the turn outright is still open. Relevant once a user has dozens of KBs and uses default-all.
+- Scope size cap (§8.5): the soft-warn cap (`scope_warn_bytes`, default 256 KiB) ships and emits a log warning when exceeded; whether to add a hard byte cap that rejects the turn outright is still open. Relevant once a user scopes dozens of KBs in a single turn.
 - Attachment retention (§5.3, §8.5): attachments live for the session lifetime — do we need a per-attachment TTL or size-based eviction inside a long-running session?
 - KB status SSE channel (§8.5): should status transitions push to the chat screen so the checkbox un-greys without polling, or is FE-side polling sufficient?
 - Output retention (§8.2): cleanup policy for `~/.da-agent/outputs/` (already adjacent to the existing `versions/` cleanup question).
