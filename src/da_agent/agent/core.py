@@ -177,13 +177,8 @@ class AgentRunner:
 
         return ClaudeAgentOptions(
             cwd=str(s.project_root),
-            setting_sources=["project", "local"],  # discover .claude/skills
-            skills=[
-                "xlsx",
-                "pptx",
-                "docx",
-                "data-analysis",
-            ],  # enable spreadsheet, pptx, docx, and DA methodology skills
+            setting_sources=["project"],  # discover .claude/skills
+            skills=["xlsx", "data-analysis"],  # main agent: only xlsx + DA methodology; pptx/docx live on the reporter subagent
             system_prompt=build_system_prompt(s, session_id=self._session_id),
             agents=build_subagents(),
             allowed_tools=_BASE_TOOLS,
@@ -192,11 +187,27 @@ class AgentRunner:
             permission_mode="plan" if s.plan_first else "default",
             model=s.model,
             max_turns=s.max_turns,
-            add_dirs=[
-                str(s.kb_dir),
-                str(s.outputs_dir),
-                str(s.attachments_dir),
-            ],
+            add_dirs=(
+                # Web path (2026-06-02 Bug-A fix): grant the SDK direct access
+                # to the canonical per-session outputs root. Earlier we tried
+                # to route writes via a symlink alias under `sessions-data/`
+                # but the SDK sandbox follows the symlink and treats the
+                # canonical inode as separate device, denying every write
+                # (EROFS / EXDEV). Listing the canonical path here makes
+                # `Bash(... > outputs/.../file.pptx)` succeed without losing
+                # KB scope (kb is still farmed) or workspace isolation.
+                [
+                    str(s.session_kb_dir(self._session_id)),
+                    str(s.session_workspace_dir(self._session_id)),
+                    str(s.outputs_session_dir(self._session_id)),
+                ]
+                if self._session_id is not None
+                else [
+                    str(s.kb_dir),
+                    str(s.outputs_dir),
+                    str(s.attachments_dir),
+                ]
+            ),
             env=env,
             include_partial_messages=s.stream_responses,
             resume=self._resume_sdk_session_id,
