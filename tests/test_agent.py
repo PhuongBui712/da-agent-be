@@ -91,17 +91,19 @@ class FakeUI:
         return self._pd
 
 
-def _runner(ui=None, *, plan_first: bool = True):
+def _runner(ui=None, *, plan_first: bool = True, session_id: str | None = None):
     s = Settings()
     s.show_thinking = True
     s.plan_first = plan_first
-    return AgentRunner(ui or FakeUI(), s)
+    return AgentRunner(ui or FakeUI(), s, session_id=session_id)
 
 
 # --------------------------------------------------------------------------- #
 def test_options_assembly():
-    opts = _runner()._build_options()
-    assert opts.skills == ["xlsx", "pptx", "docx", "data-analysis"]
+    # Web path — session_id is set, so add_dirs uses the per-session farm
+    # for kb/workspace + the canonical outputs root for the writable target.
+    opts = _runner(session_id="sess_test_assembly")._build_options()
+    assert opts.skills == ["xlsx", "data-analysis"]
     assert "project" in opts.setting_sources
     assert opts.permission_mode == "plan"
     # AskUserQuestion is the built-in tool we route through can_use_tool now —
@@ -116,10 +118,36 @@ def test_options_assembly():
     assert opts.system_prompt["type"] == "preset"
     assert opts.system_prompt["preset"] == "claude_code"
     assert "AskUserQuestion" in opts.system_prompt["append"]
-    # workspace was deprecated and must NOT leak into add_dirs nor the prompt.
+    # The deprecated TOP-LEVEL workspace dir (`<data_root>/workspace/`) must
+    # NOT leak into the prompt. The per-session farm legitimately contains a
+    # `workspace/` segment (resolves via the dispatch contract); only the
+    # legacy global path is forbidden.
+    s_check = Settings()
+    legacy_workspace = str(s_check.data_root / "workspace")
+    assert legacy_workspace not in opts.system_prompt["append"]
+    # Spec §8.5 (2026-06-02 Bug-A fix) — kb + workspace are still farmed
+    # under sessions-data; outputs is the CANONICAL `outputs/<sid>/` so the
+    # SDK sandbox can actually write there. The bare global outputs root
+    # and bare kb_dir / attachments_dir must NOT be in add_dirs.
+    s = Settings()
+    s.plan_first = True
+    sid = "sess_test_assembly"
+    sessions_data_root = str(s.sessions_data_dir)
+    canonical_outputs_for_sid = str(s.outputs_session_dir(sid))
+    for entry in opts.add_dirs:
+        under_farm = str(entry).startswith(sessions_data_root)
+        is_canonical_outputs = str(entry) == canonical_outputs_for_sid
+        assert under_farm or is_canonical_outputs, (
+            f"add_dirs entry {entry!r} is neither under sessions-data nor canonical outputs/<sid>"
+        )
     add_dirs_str = " ".join(str(p) for p in opts.add_dirs)
-    assert "workspace" not in add_dirs_str
-    assert "workspace" not in opts.system_prompt["append"].lower()
+    assert str(s.kb_dir) not in opts.add_dirs
+    assert str(s.outputs_dir) not in opts.add_dirs  # bare root rejected; <sid> path allowed
+    assert str(s.attachments_dir) not in opts.add_dirs
+    assert canonical_outputs_for_sid in opts.add_dirs
+    assert str(s.session_kb_dir(sid)) in opts.add_dirs
+    assert str(s.session_workspace_dir(sid)) in opts.add_dirs
+    assert "sess_test_assembly" in add_dirs_str
     # Layer-1 sandbox + deny rules.
     assert opts.sandbox is not None
     assert opts.sandbox["enabled"] is True
@@ -136,6 +164,18 @@ def test_options_assembly():
     # Layer-2 PreToolUse hook for Bash.
     assert "PreToolUse" in opts.hooks
     assert any(m.matcher == "Bash" for m in opts.hooks["PreToolUse"])
+
+
+def test_options_assembly_cli_fallback():
+    """CLI path — `session_id=None` falls back to the legacy global add_dirs."""
+    opts = _runner()._build_options()
+    s = Settings()
+    assert str(s.kb_dir) in opts.add_dirs
+    assert str(s.outputs_dir) in opts.add_dirs
+    assert str(s.attachments_dir) in opts.add_dirs
+    # Sanity: the deprecated workspace dir is still kept out.
+    add_dirs_str = " ".join(str(p) for p in opts.add_dirs)
+    assert "/workspace" not in add_dirs_str
 
 
 def test_render_blocks_and_filtering():

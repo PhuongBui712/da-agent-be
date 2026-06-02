@@ -152,3 +152,37 @@ async def test_delete_session_also_removes_attachments_dir(client, app):
     # The attachments/<sid>/ root itself is wiped by `discard_runtime` →
     # `attachments.delete_session(sid)`.
     assert not (state.settings.attachments_dir / sid).exists()
+
+
+async def test_session_delete_removes_session_data_dir(client, app):
+    """Spec §8.5 — DELETE /sessions/<sid> wipes the per-session farm.
+
+    2026-06-02 Bug-A: outputs is no longer a symlink alias — `add_dirs`
+    points at the canonical `outputs/<sid>/` directly. The farm only
+    holds `kb/` + `workspace/` subtrees now.
+    """
+    state = app.state.app_state
+    sess = await state.registry.create(name="farm")
+    sid = sess.id
+
+    # Seed the farm directly (mirrors what prepare_session_root would do
+    # on first message); the DELETE handler must clean this up.
+    from da_agent.server.session_farm import prepare_session_root
+
+    prepare_session_root(state.settings, sid)
+    farm_root = state.settings.session_data_dir(sid)
+    assert farm_root.is_dir()
+    assert state.settings.session_kb_dir(sid).is_dir()
+    assert state.settings.session_workspace_dir(sid).is_dir()
+    # The legacy outputs alias must NOT be created anymore.
+    assert not state.settings.session_outputs_view_dir(sid).is_symlink()
+    # Canonical outputs/<sid>/ is created eagerly so the SDK can mount it.
+    assert (state.settings.outputs_dir / sid).is_dir()
+
+    r = await client.delete(f"/sessions/{sid}")
+    assert r.status_code == 204
+
+    assert not farm_root.exists()
+    # The canonical outputs/<sid>/ tree was already removed by
+    # delete_session_outputs; sanity-check it is also gone.
+    assert not (state.settings.outputs_dir / sid).exists()
