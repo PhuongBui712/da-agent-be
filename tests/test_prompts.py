@@ -45,11 +45,23 @@ def test_append_contains_mandatory_contract_tokens(tmp_path):
     assert "resolved_target_kind" in a
 
 
-def test_append_never_mentions_workspace(tmp_path):
+def test_append_never_mentions_legacy_top_level_workspace(tmp_path):
     sp = build_system_prompt(_settings(tmp_path))
-    # Case-insensitive sweep — "workspace" is the deprecated path; nothing in
-    # the prompt must steer the model to a scratch dir.
-    assert "workspace" not in sp["append"].lower()
+    # The deprecated TOP-LEVEL workspace dir (`<data_root>/workspace/`)
+    # must never appear — that path was global and broke per-turn scope.
+    # The current per-session `<sessions-data>/<sid>/workspace/` is
+    # legitimate and is verified by `test_append_mentions_per_session_workspace`.
+    s = _settings(tmp_path)
+    assert str(s.data_root / "workspace") not in sp["append"]
+
+
+def test_append_mentions_per_session_workspace(tmp_path):
+    """Per-session workspace path must appear so the model can pass it to subagents."""
+    s = _settings(tmp_path)
+    sp = build_system_prompt(s, session_id="sess_test")
+    a = sp["append"]
+    # Resolved per-session path must be present (used in the dispatch contract).
+    assert str(s.session_workspace_dir("sess_test")) in a
 
 
 def test_append_drops_legacy_versioning_slots(tmp_path):
@@ -176,3 +188,33 @@ def test_append_delegation_examples_present(tmp_path):
     # Tolerate the soft line wrap inside <example index="10">.
     assert "Do NOT dispatch a" in a
     assert "subagent" in a
+
+
+def test_delegation_rules_mandate_subagent_dispatch_contract(tmp_path):
+    """The four-item dispatch contract must be encoded inside <delegation_rules>."""
+    sp = build_system_prompt(_settings(tmp_path), session_id="sess_test")
+    a = sp["append"]
+    block = a.split("<delegation_rules>", 1)[1].split("</delegation_rules>", 1)[0]
+    # Item 1 — working_dir, with the resolved per-session path.
+    assert "working_dir=" in block
+    # Item 2 — output_path naming.
+    assert "output_path=" in block
+    # Item 3 — verbatim forwarding + diacritic preservation negative prompt.
+    assert "VERBATIM" in block or "verbatim" in block.lower()
+    assert "transliterate" in block.lower()
+    assert "diacritic" in block.lower()
+    # Item 4 — output language rule.
+    assert "language" in block.lower()
+
+
+def test_example_11_demonstrates_pptx_delegation(tmp_path):
+    """Example 11 is the worked Vietnamese pptx pattern: reporter dispatch + diacritics."""
+    sp = build_system_prompt(_settings(tmp_path), session_id="sess_test")
+    a = sp["append"]
+    # The Vietnamese user prompt and the dispatch shape must both appear.
+    assert "Tạo 3-slide presentation mô tả con chó" in a
+    assert 'subagent_type="reporter"' in a
+    # Negative-prompt phrasing inside the example body — model must internalise
+    # the failure mode it is preventing.
+    assert "`chó`" in a
+    assert "never `cho`" in a
