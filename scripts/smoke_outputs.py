@@ -83,11 +83,30 @@ def _maybe_load_dotenv() -> None:
 
 
 def _have_api_key() -> bool:
-    keys = ("ANTHROPIC_API_KEY", "DATABRICKS_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")
+    keys = (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",  # Databricks-hosted Claude uses this
+        "DATABRICKS_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    )
     if any(os.environ.get(k) for k in keys):
         return True
     _maybe_load_dotenv()
-    return any(os.environ.get(k) for k in keys)
+    if any(os.environ.get(k) for k in keys):
+        return True
+    # Last resort — settings.local.json (Claude Code config) ships credentials
+    # in some local dev setups; the SDK subprocess will pick them up via
+    # `setting_sources=["project", "local"]`. Treat presence of that file with
+    # a non-empty ANTHROPIC_AUTH_TOKEN env as a proxy.
+    settings_path = Path(__file__).resolve().parent.parent / ".claude" / "settings.local.json"
+    if settings_path.exists():
+        try:
+            import json as _json
+            data = _json.loads(settings_path.read_text(encoding="utf-8"))
+            return bool((data.get("env") or {}).get("ANTHROPIC_AUTH_TOKEN"))
+        except Exception:
+            return False
+    return False
 
 
 def _parse_sse_chunk(buf: str) -> tuple[str, dict] | None:
@@ -368,6 +387,114 @@ def main() -> int:
         )
         _try_delete(client, sid_4)
 
+        # --- 8c. Vietnamese pptx delegation + diacritic preservation ------
+        # Verifies all four user-reported behaviors at once:
+        #   - main agent dispatches `reporter` (not building pptx itself)
+        #   - dispatch prompt names working_dir + output_path
+        #   - dispatch prompt forwards the user's Vietnamese text verbatim
+        #   - reporter writes a .pptx whose slide XML preserves diacritics
+        print("\n[smoke] phase 8c: Vietnamese pptx — delegation + diacritic preservation")
+        VN_PROMPT = "Tạo 3-slide presentation mô tả con chó."
+        r5 = client.post(f"{URL}/sessions", json={"name": "smoke-vn-pptx"})
+        if r5.status_code != 201:
+            print(f"=== FAIL: POST /sessions (phase 8c) -> {r5.status_code} {r5.text} ===")
+            return 1
+        sid_5 = r5.json()["id"]
+        print(f"[smoke] phase-8c session id = {sid_5}")
+        try:
+            events_5 = _stream_turn_with_autoanswer(
+                client,
+                sid_5,
+                VN_PROMPT,
+                target_label="New .pptx",
+                source_label="N/A",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"=== FAIL: SSE stream error (phase 8c): {exc} ===")
+            _try_delete(client, sid_5)
+            return 1
+
+        reporter_dispatches_5 = [
+            (t, p) for (t, p) in events_5
+            if t == "tool.use"
+            and p.get("name") == "Agent"
+            and (p.get("input") or {}).get("subagent_type") == "reporter"
+        ]
+        res.check(
+            "phase8c: pptx deliverable dispatches reporter (>=1 Agent call)",
+            len(reporter_dispatches_5) >= 1,
+            f"got {len(reporter_dispatches_5)} reporter dispatch(es)",
+        )
+
+        # Inspect the FIRST reporter dispatch's prompt for the contract items.
+        if reporter_dispatches_5:
+            first_input = (reporter_dispatches_5[0][1].get("input") or {})
+            dispatch_prompt = str(first_input.get("prompt", ""))
+            res.check(
+                "phase8c: dispatch prompt names working_dir=",
+                "working_dir=" in dispatch_prompt,
+                f"prompt[:200]={dispatch_prompt[:200]!r}",
+            )
+            res.check(
+                "phase8c: dispatch prompt names output_path=",
+                "output_path=" in dispatch_prompt,
+                f"prompt[:200]={dispatch_prompt[:200]!r}",
+            )
+            # Verbatim Vietnamese forwarding — partial match is enough; the
+            # core load-bearing token is the diacritic-bearing word.
+            res.check(
+                "phase8c: dispatch prompt preserves Vietnamese diacritics (chó)",
+                "chó" in dispatch_prompt,
+                "no `chó` token found in dispatch prompt",
+            )
+
+        # output.created must be a .pptx
+        output_events_5 = [(t, p) for (t, p) in events_5 if t == "output.created"]
+        res.check(
+            "phase8c: output.created arrived",
+            len(output_events_5) >= 1,
+            f"got {len(output_events_5)} event(s)",
+        )
+        pptx_filename = ""
+        if output_events_5:
+            pptx_filename = output_events_5[0][1].get("filename", "")
+            res.check(
+                "phase8c: output filename ends in .pptx",
+                pptx_filename.lower().endswith(".pptx"),
+                f"filename={pptx_filename!r}",
+            )
+
+        # Crack open the .pptx and grep slide XML for `chó` (NFC-encoded).
+        if pptx_filename:
+            on_disk = OUTPUTS_ROOT / sid_5 / pptx_filename
+            res.check(
+                "phase8c: .pptx exists on disk",
+                on_disk.exists(),
+                f"path={on_disk}",
+            )
+            if on_disk.exists():
+                import zipfile
+
+                slide_text_blob = ""
+                try:
+                    with zipfile.ZipFile(on_disk) as z:
+                        for name in z.namelist():
+                            if name.startswith("ppt/slides/slide") and name.endswith(".xml"):
+                                slide_text_blob += z.read(name).decode("utf-8", errors="replace")
+                except Exception as exc:  # noqa: BLE001
+                    slide_text_blob = ""
+                    res.check(
+                        "phase8c: .pptx unzippable",
+                        False,
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                res.check(
+                    "phase8c: slide XML contains `chó` (Vietnamese diacritic preserved)",
+                    "chó" in slide_text_blob,
+                    "diacritic-loss bug — slide XML has only `cho`/no Vietnamese token",
+                )
+        _try_delete(client, sid_5)
+
     # --- Summary -----------------------------------------------------------
     if not res.failures:
         print("\n=== PASS ===")
@@ -377,7 +504,12 @@ def main() -> int:
 
 
 def _stream_turn_with_autoanswer(
-    client: httpx.Client, sid: str, prompt: str
+    client: httpx.Client,
+    sid: str,
+    prompt: str,
+    *,
+    target_label: str = "New .xlsx",
+    source_label: str = "N/A",
 ) -> list[tuple[str, dict]]:
     """Stream a turn that may include AskUserQuestion interactions.
 
@@ -427,9 +559,9 @@ def _stream_turn_with_autoanswer(
                                 header = (q.get("header") or "").lower()
                                 # Q1 is "Target"; Q2 is "Source" (or absent for standalone)
                                 if "source" in header:
-                                    answers.append({"label": "N/A"})
+                                    answers.append({"label": source_label})
                                 else:
-                                    answers.append({"label": "New .xlsx"})
+                                    answers.append({"label": target_label})
                             t = threading.Thread(
                                 target=_post_answer,
                                 args=(tool_use_id, answers),
