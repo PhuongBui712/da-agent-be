@@ -62,13 +62,17 @@ _SCOPABLE_STATUSES = {"READY", "READY_PARTIAL"}
 async def build_scope(*, state: AppState, sid: str, body: MessageRequest) -> ScopeBlock:
     """Run the spec §8.5 validation table; raises 400 on first failure.
 
-    Validation order (spec §8.5 lines 656-662, adapted for the memory-driven
-    pipeline):
-        1. kb_scope == []   -> 400 "kb_scope cannot be empty; omit the field for default-all"
-        2. unknown kb_id    -> 400 "unknown kb_id: <id>"
-        3. non-scopable id  -> 400 "kb <id> is in status <X>; only READY/READY_PARTIAL files can be scoped"
-        4. duplicate att_id -> 400 "duplicate attachment_id"
-        5. unknown att_id   -> 400 "unknown attachment_id: <id>"
+    Default semantics (2026-06-02): a payload with no `kb_scope` field — or an
+    explicit empty list — yields an empty <scope> block. The caller (FE) MUST
+    list the kb_ids it wants in scope; the BE never silently auto-loads every
+    READY KB. This mirrors the symlink-farm filesystem layer (the operative
+    permission gate) — both are "explicit-only".
+
+    Validation order:
+        1. unknown kb_id    -> 400 "unknown kb_id: <id>"
+        2. non-scopable id  -> 400 "kb <id> is in status <X>; only READY/READY_PARTIAL files can be scoped"
+        3. duplicate att_id -> 400 "duplicate attachment_id"
+        4. unknown att_id   -> 400 "unknown attachment_id: <id>"
 
     READY_PARTIAL is intentionally allowed: those KBs lack a memory note
     (profiler failed) but the raw.xlsx is intact and the agent can still
@@ -81,18 +85,9 @@ async def build_scope(*, state: AppState, sid: str, body: MessageRequest) -> Sco
     block = ScopeBlock()
 
     # --- KB scope ---
-    if body.kb_scope is None:
-        # Default-all: every scopable KB.
-        for meta in await state.kb.list():
-            if meta.status in _SCOPABLE_STATUSES:
-                entry = _kb_entry(state, meta)
-                block.kb_entries.append(entry)
-                block.total_memory_bytes += entry.memory_size
-    else:
-        if len(body.kb_scope) == 0:
-            raise _bad_request(
-                "kb_scope cannot be empty; omit the field for default-all"
-            )
+    # `kb_scope is None` (field omitted) and `kb_scope == []` are now identical:
+    # both produce an empty scope. The agent only sees the KBs the FE listed.
+    if body.kb_scope:
         for kb_id in body.kb_scope:
             meta = await state.kb.get(kb_id)
             if meta is None:

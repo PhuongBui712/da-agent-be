@@ -126,16 +126,16 @@ OUTS=$(curl -fsS "$BASE/outputs?session_id=$SID")
 echo "$OUTS" | jq -e '.outputs | type == "array"' >/dev/null || fail "outputs response shape wrong"
 ok "outputs=$(echo "$OUTS" | jq -r '.outputs | length')"
 
-# 11. kb_scope=[] -> 400
-step "POST $BASE/sessions/$SID/messages kb_scope=[] (expect 400)"
-SCOPE_EMPTY=$(curl -s -o /tmp/_scope_empty.json -w '%{http_code}' \
+# 11. kb_scope=[] -> 200 (2026-06-02 semantics: empty == empty scope, not 400)
+step "POST $BASE/sessions/$SID/messages kb_scope=[] (expect 200, drains)"
+SCOPE_EMPTY=$(curl -s -o /tmp/_scope_empty.txt -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"hi","kb_scope":[]}' \
   "$BASE/sessions/$SID/messages")
-[[ "$SCOPE_EMPTY" == "400" ]] || fail "expected 400, got $SCOPE_EMPTY"
-ERR_MSG=$(jq -r '.detail.error // .error // ""' </tmp/_scope_empty.json)
-[[ "$ERR_MSG" == *"kb_scope cannot be empty"* ]] || fail "wrong error body: $ERR_MSG"
-ok "400 + correct error string"
+[[ "$SCOPE_EMPTY" == "200" ]] || fail "expected 200, got $SCOPE_EMPTY"
+grep -q "no KB files are in scope\|user.prompt" /tmp/_scope_empty.txt \
+  || fail "expected empty <scope> markers in response body"
+ok "200 + empty scope rendered"
 
 # 12. unknown kb_id -> 400
 step "POST $BASE/sessions/$SID/messages kb_scope=[bogus] (expect 400)"

@@ -149,7 +149,10 @@ async def _drain(resp: httpx.Response) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 1. Default — no kb_scope, no attachments → 200, turn opens.
+# 1. Default — no kb_scope, no attachments → 200, turn opens with empty scope.
+# 2026-06-02: a missing `kb_scope` field is identical to `kb_scope: []` —
+# both yield an empty <scope> block. The BE never silently auto-loads
+# every READY KB; the FE must list explicit kb_ids when it wants context.
 # --------------------------------------------------------------------------- #
 async def test_default_no_scope_no_attachments_starts_turn(client, sid):
     original = _install_script([_result_message()])
@@ -173,18 +176,50 @@ async def test_default_no_scope_no_attachments_starts_turn(client, sid):
 
 
 # --------------------------------------------------------------------------- #
-# 2. kb_scope == [] → 400 with the verbatim spec message.
+# 1b. Even with READY KBs in registry, omitting `kb_scope` yields empty scope
+#     (regression test for the implicit-default-all bug, 2026-06-02).
 # --------------------------------------------------------------------------- #
-async def test_kb_scope_empty_array_returns_400(client, sid):
-    r = await client.post(
-        f"/sessions/{sid}/messages",
-        json={"prompt": "x", "kb_scope": []},
-    )
-    assert r.status_code == 400
-    detail = r.json()["detail"]
-    assert detail["error"] == (
-        "kb_scope cannot be empty; omit the field for default-all"
-    )
+async def test_missing_kb_scope_does_not_auto_load_ready_kbs(app, client, sid):
+    state = app.state.app_state
+    meta = await state.kb.create(filename="auto.xlsx", size_bytes=10)
+    await state.kb.update_status(meta.id, "READY")
+
+    original = _install_script([_result_message()])
+    try:
+        async with client.stream(
+            "POST", f"/sessions/{sid}/messages", json={"prompt": "Hi"}
+        ) as resp:
+            assert resp.status_code == 200
+            await _drain(resp)
+    finally:
+        _restore_init(original)
+
+    fc = FakeClient.instances[-1]
+    composed = fc.queries[0]
+    # The READY KB MUST NOT appear in the composed prompt.
+    assert meta.id not in composed
+    assert "no KB files are in scope" in composed
+
+
+# --------------------------------------------------------------------------- #
+# 2. kb_scope == [] → 200 with empty scope (was 400 before 2026-06-02).
+# --------------------------------------------------------------------------- #
+async def test_kb_scope_empty_array_yields_empty_scope(client, sid):
+    original = _install_script([_result_message()])
+    try:
+        async with client.stream(
+            "POST",
+            f"/sessions/{sid}/messages",
+            json={"prompt": "x", "kb_scope": []},
+        ) as resp:
+            assert resp.status_code == 200
+            await _drain(resp)
+    finally:
+        _restore_init(original)
+
+    fc = FakeClient.instances[-1]
+    composed = fc.queries[0]
+    assert "no KB files are in scope" in composed
 
 
 # --------------------------------------------------------------------------- #
@@ -373,9 +408,125 @@ def test_render_scope_with_attachment_entry():
 
 
 # --------------------------------------------------------------------------- #
-# 10. Default-all with mixed READY / PROFILING — only READY ends up in scope.
+# Spec §8.5 — symlink farm enforces add_dirs scoping.
 # --------------------------------------------------------------------------- #
-async def test_default_all_kbs_only_ready_in_block(app, client, sid):
+async def test_kb_scope_rebuilds_symlinks(app, client, sid):
+    """Per-turn rebuild swaps the symlink farm to match kb_scope exactly."""
+    state = app.state.app_state
+    settings = state.settings
+
+    # Seed two READY KBs whose canonical kb_dir/<id>/ directories exist.
+    a = await state.kb.create(filename="a.xlsx", size_bytes=10)
+    await state.kb.update_status(a.id, "READY")
+    (settings.kb_dir / a.id).mkdir(parents=True, exist_ok=True)
+
+    b = await state.kb.create(filename="b.xlsx", size_bytes=10)
+    await state.kb.update_status(b.id, "READY")
+    (settings.kb_dir / b.id).mkdir(parents=True, exist_ok=True)
+
+    farm = settings.session_kb_dir(sid)
+
+    # Turn 1: kb_scope=[a]
+    original = _install_script([_result_message()])
+    try:
+        async with client.stream(
+            "POST",
+            f"/sessions/{sid}/messages",
+            json={"prompt": "p", "kb_scope": [a.id]},
+        ) as resp:
+            assert resp.status_code == 200
+            await _drain(resp)
+    finally:
+        _restore_init(original)
+
+    children = {p.name for p in farm.iterdir() if p.is_symlink()}
+    assert children == {a.id}
+
+    # Turn 2: kb_scope=[b] — stale symlink for `a` is removed, `b` is added.
+    original = _install_script([_result_message()])
+    try:
+        async with client.stream(
+            "POST",
+            f"/sessions/{sid}/messages",
+            json={"prompt": "p2", "kb_scope": [b.id]},
+        ) as resp:
+            assert resp.status_code == 200
+            await _drain(resp)
+    finally:
+        _restore_init(original)
+
+    children = {p.name for p in farm.iterdir() if p.is_symlink()}
+    assert children == {b.id}
+
+
+async def test_session_root_canonical_outputs_dir_exists(app, client, sid):
+    """`prepare_session_root` (run by post_message) ensures the canonical
+    `outputs/<sid>/` exists and is a real directory.
+
+    2026-06-02 Bug-A: outputs is no longer aliased via a symlink under
+    `sessions-data/<sid>/outputs/`. The canonical path is in `add_dirs`
+    directly so the SDK sandbox can write through it.
+    """
+    state = app.state.app_state
+    settings = state.settings
+
+    # Trigger a turn so post_message → prepare_session_root fires.
+    original = _install_script([_result_message()])
+    try:
+        async with client.stream(
+            "POST", f"/sessions/{sid}/messages", json={"prompt": "p"}
+        ) as resp:
+            assert resp.status_code == 200
+            await _drain(resp)
+    finally:
+        _restore_init(original)
+
+    canonical = settings.outputs_dir / sid
+    assert canonical.is_dir() and not canonical.is_symlink()
+    # The legacy alias must NOT exist.
+    view = settings.session_outputs_view_dir(sid)
+    assert not view.exists() or not view.is_symlink()
+
+
+def test_add_dirs_uses_session_farm_plus_canonical_outputs(settings):
+    """AgentRunner with a session_id must list per-session farm paths for kb +
+    workspace AND the CANONICAL outputs/<sid> path (Bug-A fix). The bare
+    global `kb_dir`/`outputs_dir`/`attachments_dir` must NOT be in add_dirs."""
+    from da_agent.agent.core import AgentRunner
+
+    class _SilentUI:
+        def begin_wait(self, *_a, **_k):
+            pass
+
+        def end_wait(self):
+            pass
+
+        def on_todos(self, *_a, **_k):
+            pass
+
+    sid = "sess_farm_assert"
+    runner = AgentRunner(_SilentUI(), settings, session_id=sid)
+    opts = runner._build_options()
+
+    add_dirs = list(opts.add_dirs)
+    assert str(settings.kb_dir) not in add_dirs
+    assert str(settings.outputs_dir) not in add_dirs  # bare root forbidden
+    assert str(settings.attachments_dir) not in add_dirs
+    # Per-session farm for kb + workspace.
+    assert str(settings.session_kb_dir(sid)) in add_dirs
+    assert str(settings.session_workspace_dir(sid)) in add_dirs
+    # Canonical outputs is in add_dirs (sandbox-allowed write target).
+    assert str(settings.outputs_session_dir(sid)) in add_dirs
+    # The deprecated symlink alias path is NOT in add_dirs.
+    assert str(settings.session_outputs_view_dir(sid)) not in add_dirs
+
+
+# --------------------------------------------------------------------------- #
+# 10. Explicit scope with PROFILING kb in same registry — only the explicitly
+#     listed READY one ends up in scope (2026-06-02: replaces the legacy
+#     default-all test).
+# --------------------------------------------------------------------------- #
+async def test_explicit_kb_scope_filters_to_only_listed_ready(app, client, sid):
     state = app.state.app_state
     ready = await state.kb.create(filename="ready.xlsx", size_bytes=10)
     await state.kb.update_status(ready.id, "READY")
@@ -385,7 +536,9 @@ async def test_default_all_kbs_only_ready_in_block(app, client, sid):
     original = _install_script([_result_message()])
     try:
         async with client.stream(
-            "POST", f"/sessions/{sid}/messages", json={"prompt": "p"}
+            "POST",
+            f"/sessions/{sid}/messages",
+            json={"prompt": "p", "kb_scope": [ready.id]},
         ) as resp:
             assert resp.status_code == 200
             await _drain(resp)

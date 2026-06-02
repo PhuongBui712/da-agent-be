@@ -53,8 +53,13 @@ class AttachmentRef(BaseModel):
 class MessageRequest(BaseModel):
     """Spec §8.5 — `prompt` is required; `kb_scope` and `attachments` are optional.
 
-    `kb_scope=None`/missing → default-all READY KBs.
-    `kb_scope=[]` → 400 (forces explicit per §8.5 validation table).
+    Default semantics (2026-06-02):
+      * `kb_scope` missing or null → empty <scope> block (no KBs in scope).
+      * `kb_scope == []`           → empty <scope> block (identical to missing).
+      * `kb_scope == [ids…]`       → only the listed READY/READY_PARTIAL KBs.
+
+    The BE never silently auto-loads every READY KB. The FE MUST list the
+    kb_ids it wants the agent to see.
     """
 
     prompt: str = Field(min_length=1)
