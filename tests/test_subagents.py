@@ -58,3 +58,30 @@ def test_kb_profiler_NOT_in_main_subagents() -> None:
 
     agents = build_subagents(Settings())
     assert "kb_profiler" not in agents
+
+
+def test_reporter_prompt_preserves_vietnamese_rule():
+    """Reporter prompt must contain explicit Vietnamese diacritic preservation rules."""
+    from da_agent.agent.subagents import build_subagents
+
+    reporter = build_subagents()["reporter"]
+    text = reporter.prompt
+    # Positive: must mention Vietnamese + diacritics
+    assert "Vietnamese" in text
+    assert "diacritic" in text.lower()
+    # Negative-prompt phrasing: explicitly forbid the failure modes
+    assert "transliterate" in text.lower()
+    # Concrete worked examples (one or both):
+    assert "Ngân hàng" in text or "chó" in text
+
+
+def test_reporter_prompt_mandates_working_dir_discipline():
+    """Reporter prompt must mandate working_dir vs output_path discipline."""
+    from da_agent.agent.subagents import build_subagents
+
+    reporter = build_subagents()["reporter"]
+    text = reporter.prompt
+    assert "working_dir" in text
+    assert "output_path" in text
+    # Negative: forbid ad-hoc paths
+    assert "/tmp" in text  # the rule explicitly mentions /tmp as forbidden
