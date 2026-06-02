@@ -10,6 +10,10 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv(".env")
+
 
 def find_project_root(start: Path | None = None) -> Path:
     """Walk upward from this file (or `start`) until a dir containing `.claude` is found.
@@ -44,7 +48,7 @@ class Settings:
     # `opus` alias so the env-configured ANTHROPIC_DEFAULT_OPUS_MODEL applies;
     # set DA_AGENT_KB_PROFILER_MODEL to a full id to pin a specific opus build.
     kb_profiler_model: str = field(
-        default_factory=lambda: os.getenv("DA_AGENT_KB_PROFILER_MODEL", "opus")
+        default_factory=lambda: os.getenv("DA_AGENT_KB_PROFILER_MODEL", "databricks-claude-opus-4-6")
     )
 
     # Start each session in plan mode so complex requests produce a plan + approval
@@ -154,6 +158,33 @@ class Settings:
         """`<data_root>/agent-memory/kb_profiler/` — where per-KB notes land."""
         return self.agent_memory_dir / "kb_profiler"
 
+    @property
+    def sessions_data_dir(self) -> Path:
+        """Per-session symlink farm root: `<data_root>/sessions-data/`.
+
+        Each session gets `<sessions-data>/<sid>/{kb, workspace, outputs}/`.
+        `kb/` and `outputs/` are populated with symlinks pointing at the
+        canonical `kb_dir` / `outputs_dir/<sid>/` so the SDK only sees
+        per-turn-scoped paths through `add_dirs` (spec §8.5 enforcement).
+        """
+        return self.data_root / "sessions-data"
+
+    def session_data_dir(self, session_id: str) -> Path:
+        """`<sessions-data>/<sid>/` — root of one session's farm."""
+        return self.sessions_data_dir / session_id
+
+    def session_kb_dir(self, session_id: str) -> Path:
+        """`<sessions-data>/<sid>/kb/` — symlink farm for in-scope KBs."""
+        return self.session_data_dir(session_id) / "kb"
+
+    def session_workspace_dir(self, session_id: str) -> Path:
+        """`<sessions-data>/<sid>/workspace/` — per-session scratch root."""
+        return self.session_data_dir(session_id) / "workspace"
+
+    def session_outputs_view_dir(self, session_id: str) -> Path:
+        """`<sessions-data>/<sid>/outputs/` — symlink to canonical `outputs/<sid>/`."""
+        return self.session_data_dir(session_id) / "outputs"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.data_root,
@@ -162,6 +193,7 @@ class Settings:
             self.outputs_dir,
             self.attachments_dir,
             self.kb_profiler_memory_dir,
+            self.sessions_data_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
