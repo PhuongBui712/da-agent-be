@@ -17,6 +17,8 @@ services:
         INSTALL_LIBREOFFICE: "1"
     ports:
       - "8765:8765"
+    env_file:
+      - .env
     volumes:
       - da-agent-data:/data
 
