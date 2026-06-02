@@ -22,7 +22,8 @@ from ...agent.core import AgentRunner
 from ...agent.permissions import TargetResolution, TargetValidationError
 from ...outputs import OutputDetection
 from ..schemas import MessageRequest
-from ..scope import build_scope, render_scope
+from ..scope import ScopeBlock, build_scope, render_scope
+from ..session_farm import prepare_session_root, rebuild_kb_symlinks
 from ..sse import format_event
 from ..state import AppState, SessionRuntime, TurnStream
 from ..web_ui import WebAgentUI
@@ -71,6 +72,13 @@ async def _resolve_output_target(
     `outputs/<session_id>/<filename>`. Filename collisions in the same
     session get a `_vN` suffix bumped by `_unique_filename`.
 
+    2026-06-02 Bug-A fix: `resolved_target_path` is the canonical
+    `<data_root>/outputs/<sid>/<filename>` and `add_dirs` lists that same
+    canonical root. We previously tried a symlink alias under
+    `sessions-data/<sid>/outputs/`, but the SDK sandbox follows the
+    symlink and treats the canonical inode as a different device — every
+    Bash write hit EROFS / EXDEV. Direct canonical paths fix that.
+
     Raises `TargetValidationError` on any validation failure (the
     permission gate maps it to `PermissionResultDeny`).
     """
@@ -87,8 +95,8 @@ async def _resolve_output_target(
     kb_metas = await state.kb.list()
     att_metas = await state.attachments.list(sid)
 
-    session_root = state.settings.outputs_session_dir(sid)
-    session_root.mkdir(parents=True, exist_ok=True)
+    canonical_root = state.settings.outputs_session_dir(sid)
+    canonical_root.mkdir(parents=True, exist_ok=True)
 
     _STANDALONE_EXT = {
         "New .xlsx": ".xlsx",
@@ -97,9 +105,9 @@ async def _resolve_output_target(
     }
     if target in _STANDALONE_EXT:
         ext = _STANDALONE_EXT[target]
-        filename = _unique_filename(session_root, "output", ext)
+        filename = _unique_filename(canonical_root, "output", ext)
         return TargetResolution(
-            resolved_target_path=str(session_root / filename),
+            resolved_target_path=str(canonical_root / filename),
             resolved_target_kind="standalone",
         )
 
@@ -117,9 +125,9 @@ async def _resolve_output_target(
             meta = next(m for m in kb_metas if m.id == head)
             base = Path(meta.filename).stem or "output"
             ext = Path(meta.filename).suffix or ".xlsx"
-            filename = _unique_filename(session_root, base, ext)
+            filename = _unique_filename(canonical_root, base, ext)
             return TargetResolution(
-                resolved_target_path=str(session_root / filename),
+                resolved_target_path=str(canonical_root / filename),
                 resolved_target_kind="kb_version",
             )
         if head.startswith("att_"):
@@ -128,9 +136,9 @@ async def _resolve_output_target(
                 raise TargetValidationError(f"unknown attachment_id: {head}")
             base = Path(att.filename).stem or "output"
             ext = Path(att.filename).suffix or ".xlsx"
-            filename = _unique_filename(session_root, base, ext)
+            filename = _unique_filename(canonical_root, base, ext)
             return TargetResolution(
-                resolved_target_path=str(session_root / filename),
+                resolved_target_path=str(canonical_root / filename),
                 resolved_target_kind="attachment_version",
             )
         raise TargetValidationError(
@@ -241,6 +249,10 @@ async def post_message(
     if runtime is None:
         raise HTTPException(status_code=404, detail="session not found")
 
+    # Spec §8.5 — bootstrap the per-session symlink farm before validating
+    # scope. Idempotent.
+    prepare_session_root(state.settings, sid)
+
     # Spec §8.5 — validate kb_scope/attachments and prepend the <scope> block to
     # the user prompt before the SDK is started. Validation HTTPException(400)
     # bubbles up; AgentRunner sees only the composed string.
@@ -248,7 +260,9 @@ async def post_message(
     composed_prompt = render_scope(block, body.prompt)
 
     return StreamingResponse(
-        _stream_turn(runtime=runtime, prompt=composed_prompt, state=state),
+        _stream_turn(
+            runtime=runtime, prompt=composed_prompt, scope_block=block, state=state
+        ),
         media_type="text/event-stream",
     )
 
@@ -257,12 +271,18 @@ async def _stream_turn(
     *,
     runtime: SessionRuntime,
     prompt: str,
+    scope_block: ScopeBlock,
     state: AppState,
 ):
     await runtime.lock.acquire()
     try:
         await _ensure_runner(runtime, state)
         await state.registry.touch(runtime.meta.id)
+
+        # Spec §8.5 — rebuild symlink farm for this turn's kb_scope. Runs under
+        # `runtime.lock` (acquired above), so concurrent turns within a session
+        # serialise.
+        rebuild_kb_symlinks(state.settings, runtime.meta.id, scope_block)
 
         stream = TurnStream()
         runtime.ui.attach(stream)
