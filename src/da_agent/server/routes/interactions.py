@@ -80,7 +80,7 @@ async def respond_interaction(
     # Tell the live SSE stream the parked entry is gone so the FE reducer can
     # pop it from `pendingInteractions[]`. Without this signal the reducer
     # accumulates stale entries and the head of the queue never advances to a
-    # second AskUserQuestion within the same turn (FE bug-report 2026-05-31).
+    # second AskUserQuestion within the same turn.
     runtime = await state.get_or_create_runtime(sid)
     if runtime is not None and runtime.ui is not None:
         runtime.ui.emit_interaction_resolved(tool_use_id, target.kind)

@@ -113,7 +113,7 @@ def test_options_assembly():
     assert set(opts.agents) == {"profiler", "analyst", "reporter"}
     assert callable(opts.can_use_tool)
     assert opts.env["CLAUDE_CONFIG_DIR"].endswith("sessions")
-    # Spec §8.2 — system prompt is the SDK preset+append dict shape.
+    # System prompt is the SDK preset+append dict shape.
     assert isinstance(opts.system_prompt, dict)
     assert opts.system_prompt["type"] == "preset"
     assert opts.system_prompt["preset"] == "claude_code"
@@ -125,10 +125,10 @@ def test_options_assembly():
     s_check = Settings()
     legacy_workspace = str(s_check.data_root / "workspace")
     assert legacy_workspace not in opts.system_prompt["append"]
-    # Spec §8.5 (2026-06-02 Bug-A fix) — kb + workspace are still farmed
-    # under sessions-data; outputs is the CANONICAL `outputs/<sid>/` so the
-    # SDK sandbox can actually write there. The bare global outputs root
-    # and bare kb_dir / attachments_dir must NOT be in add_dirs.
+    # kb + workspace are still farmed under sessions-data; outputs is the
+    # CANONICAL `outputs/<sid>/` so the SDK sandbox can actually write there.
+    # The bare global outputs root and bare kb_dir / attachments_dir must NOT
+    # be in add_dirs.
     s = Settings()
     s.plan_first = True
     sid = "sess_test_assembly"
@@ -142,7 +142,7 @@ def test_options_assembly():
         )
     add_dirs_str = " ".join(str(p) for p in opts.add_dirs)
     assert str(s.kb_dir) not in opts.add_dirs
-    assert str(s.outputs_dir) not in opts.add_dirs  # bare root rejected; <sid> path allowed
+    assert str(s.outputs_dir) not in opts.add_dirs  # bare root rejected; per-session path allowed
     assert str(s.attachments_dir) not in opts.add_dirs
     assert canonical_outputs_for_sid in opts.add_dirs
     assert str(s.session_kb_dir(sid)) in opts.add_dirs

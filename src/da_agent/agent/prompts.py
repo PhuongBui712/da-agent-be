@@ -4,12 +4,11 @@ We layer custom instructions on top of the SDK's `claude_code` preset
 (`{"type": "preset", "preset": "claude_code", "append": "..."}`) per
 https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts#append-to-the-claude_code-preset
 — this preserves Claude Code's tool guidance, safety rules, and environment
-context, and layers our DA-Agent persona + output discipline on top.
+context, and layers the DA-Agent persona + output discipline on top.
 
 The append text is XML-structured for hierarchy (per Claude prompting best
 practices: structure with XML tags, give Claude a role, use direct/imperative
-voice, use worked examples). It also encodes the Trigger Rules and Output
-Targets contract from spec §8.2 — the model MUST call AskUserQuestion before
+voice, use worked examples). The model MUST call AskUserQuestion before
 writing a deliverable when the user has not chosen a target explicitly.
 """
 
@@ -25,17 +24,16 @@ def build_system_prompt(
 ) -> dict[str, Any]:
     """Return the SDK SystemPromptPreset dict for `claude_code` + append.
 
-    When `session_id` is provided (web path), the literal `<session_id>`
-    placeholder embedded in the prompt body is substituted with the actual
-    server-side sid (e.g. `sess_abc123def456789a`) so the model can write
-    `outputs/sess_.../file.xlsx` without having to guess the directory name.
-    CLI / tests pass None; the literal placeholder remains in the text.
+    When `session_id` is provided, the `<session_id>` placeholder in the
+    prompt body is replaced with the actual session id so the model can write
+    to the correct outputs subdirectory. CLI / tests pass None; the literal
+    placeholder remains in the text.
     """
     if session_id:
         workspace_dir = str(settings.session_workspace_dir(session_id))
     else:
-        # CLI / tests: leave a literal placeholder so the prompt still reads
-        # cleanly without binding to a real path.
+        # CLI / tests: literal placeholder keeps the prompt readable without
+        # binding to a real path.
         workspace_dir = f"{settings.sessions_data_dir}/<session_id>/workspace"
     body = _APPEND_TEMPLATE.format(
         kb_dir=settings.kb_dir,

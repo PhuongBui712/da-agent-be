@@ -46,7 +46,6 @@ from .todos import TodoStore, TODO_TOOL_NAMES
 # todo overlay) renders them instead.
 _INTERACTIVE_TOOLS = {"AskUserQuestion", "ExitPlanMode"} | TODO_TOOL_NAMES
 
-# Phase C 2026-05-31 — assistant text scrubber (Risk #3 mitigation).
 # Replace any absolute filesystem path that ends in a known deliverable
 # extension with the basename only. Belt-and-suspenders against the agent
 # leaking `/data/...` / `/home/...` paths in chat text despite the prompt
@@ -107,40 +106,37 @@ class AgentRunner:
         self._first_block = True
         self._todos = TodoStore()
         # When set, passed to `ClaudeAgentOptions(resume=...)` so the SDK
-        # resumes the existing JSONL transcript instead of opening a new
-        # session. Captured from `SystemMessage(init)` and persisted on
-        # SessionMeta by the route layer (server/routes/messages.py).
+        # resumes the existing JSONL transcript instead of opening a new session.
         self._resume_sdk_session_id = resume_sdk_session_id
-        # Spec §8.2 — when supplied, validates AskUserQuestion (Target, Source)
-        # pairs and injects `resolved_target_path` into the tool_result.
+        # When supplied, validates AskUserQuestion (Target, Source) pairs and
+        # injects `resolved_target_path` into the tool_result.
         # CLI passes None (no path resolution); web wires a closure that has
         # access to the per-session state.
         self._resolve_target = resolve_target
-        # Web path passes the real `sess_<hex16>`; CLI passes None. Stored so
+        # Web path passes the real session id; CLI passes None. Stored so
         # `_build_options` can hand it to `build_system_prompt` and let the
         # model see the actual outputs subdir name in the prompt body.
         self._session_id = session_id
-        # Phase C 2026-05-31 — observer scopes detection to a single session's
-        # outputs subtree. CLI invocations have no real session id; we use
-        # `_cli` as a sentinel that still produces a valid (if unused) path.
+        # Observer scopes detection to a single session's outputs subtree.
+        # CLI invocations have no real session id; `_cli` is a sentinel that
+        # still produces a valid (if unused) path.
         observer_session_id = session_id or "_cli"
-        # Spec §8.2 — observe Write/Edit/Bash tool calls and surface detected
-        # writes under outputs_dir/<session_id>/<out_id>/. CLI passes no
-        # callback (`on_output_detection=None`) and the observer becomes a
-        # silent sink; the server wires the bridge into AppState.outputs.
+        # Observe Write/Edit/Bash tool calls and surface detected writes under
+        # outputs_dir/<session_id>/. CLI passes no callback (`on_output_detection=None`)
+        # and the observer becomes a silent sink; the server wires the bridge
+        # into AppState.outputs.
         self._outputs_observer = OutputsObserver(
             outputs_dir=self.settings.outputs_dir,
             session_id=observer_session_id,
             kb_dir=self.settings.kb_dir,
             attachments_dir=self.settings.attachments_dir,
-            on_detect=on_output_detection or (lambda _det: None),
+            on_detect=on_output_detection or (lambda _: None),
         )
         # Per-turn streaming state. Reset in `send`.
         # `_stream_blocks`: SDK content-block index -> (kind, block_id) where
         # kind ∈ {"text", "thinking"}; tool_use indices are absent (the full
         # ToolUseBlock always dispatches via `_render_block`). Entries persist
-        # for the whole turn so the trailing AssistantMessage can suppress by
-        # position (spec §8.6).
+        # for the whole turn so the trailing AssistantMessage can suppress by position.
         self._stream_blocks: dict[int, tuple[str, str]] = {}
         # block_ids that received at least one delta. A streamed block is
         # suppressed at its SDK content-block index iff its block_id sits in
@@ -155,7 +151,7 @@ class AgentRunner:
         await self._client.connect()
         return self
 
-    async def __aexit__(self, *exc) -> None:
+    async def __aexit__(self, *_exc) -> None:
         if self._client is not None:
             await self._client.disconnect()
             self._client = None
@@ -188,14 +184,9 @@ class AgentRunner:
             model=s.model,
             max_turns=s.max_turns,
             add_dirs=(
-                # Web path (2026-06-02 Bug-A fix): grant the SDK direct access
-                # to the canonical per-session outputs root. Earlier we tried
-                # to route writes via a symlink alias under `sessions-data/`
-                # but the SDK sandbox follows the symlink and treats the
-                # canonical inode as separate device, denying every write
-                # (EROFS / EXDEV). Listing the canonical path here makes
-                # `Bash(... > outputs/.../file.pptx)` succeed without losing
-                # KB scope (kb is still farmed) or workspace isolation.
+                # Grant the SDK direct access to the canonical per-session
+                # outputs root. Listing the canonical path (rather than a
+                # symlink alias) avoids EROFS / EXDEV sandbox rejections.
                 [
                     str(s.session_kb_dir(self._session_id)),
                     str(s.session_workspace_dir(self._session_id)),
@@ -250,20 +241,19 @@ class AgentRunner:
         if isinstance(message, SystemMessage):
             self.ui.on_system(message.subtype, message.data or {})
         elif isinstance(message, StreamEvent):
-            # Subagent token stream is not surfaced in v1 (spec §8.6);
-            # the full subagent AssistantMessage still renders via the
-            # parent_tool_use_id path on the trailing message.
+            # Subagent token stream is not surfaced in v1; the full subagent
+            # AssistantMessage renders via the parent_tool_use_id path on the
+            # trailing message.
             if message.parent_tool_use_id is None:
                 self._handle_stream_event(message)
         elif isinstance(message, AssistantMessage):
             depth = 1 if message.parent_tool_use_id else 0
             is_main_thread = message.parent_tool_use_id is None
             for pos, block in enumerate(message.content):
-                # Suppression rule (spec §8.6): on the main thread, a
-                # text/thinking block whose SDK index already streamed at
-                # least one delta is NOT re-rendered atomically. Subagent
-                # AssistantMessages are never suppressed -- token streaming
-                # inside the lane is deferred to v1.1.
+                # Suppression rule: on the main thread, a text/thinking block
+                # whose SDK index already streamed at least one delta is NOT
+                # re-rendered atomically. Subagent AssistantMessages are never
+                # suppressed -- token streaming inside the lane is deferred to v1.1.
                 if is_main_thread and isinstance(block, (TextBlock, ThinkingBlock)):
                     entry = self._stream_blocks.get(pos)
                     if entry is not None and entry[1] in self._streamed_block_ids:
@@ -283,7 +273,7 @@ class AgentRunner:
             )
 
     # ------------------------------------------------------------------ #
-    # token-level streaming (spec §8.6)
+    # token-level streaming
     # ------------------------------------------------------------------ #
     def _handle_stream_event(self, message: StreamEvent) -> None:
         ev = message.event or {}
@@ -356,10 +346,10 @@ class AgentRunner:
                 self.ui.on_thinking(block.thinking)
         elif isinstance(block, TextBlock):
             if block.text.strip():
-                # Phase C 2026-05-31 — scrub absolute path leaks in chat text
-                # before they reach the UI. Primary defense is the prompt;
-                # this is belt-and-suspenders. Atomic blocks only — deltas
-                # may span chunk boundaries and are not buffered here.
+                # Scrub absolute path leaks before they reach the UI.
+                # Primary defense is the prompt; this is belt-and-suspenders.
+                # Atomic blocks only — deltas may span chunk boundaries and
+                # are not buffered here.
                 self.ui.on_text(_scrub_path_leaks(block.text))
         elif isinstance(block, ToolUseBlock):
             if block.name in TODO_TOOL_NAMES:
@@ -367,8 +357,8 @@ class AgentRunner:
                 return
             if block.name in _INTERACTIVE_TOOLS:
                 return  # handled by dedicated interactive UI
-            # Spec §8.2 — observe Write/Edit/Bash output sites. No-op for any
-            # other tool name (gated inside the observer).
+            # Observe Write/Edit/Bash output sites. No-op for any other tool
+            # name (gated inside the observer).
             self._outputs_observer.observe_tool_use(
                 block.id, block.name, block.input or {}
             )
@@ -386,8 +376,8 @@ class AgentRunner:
             self._absorb_todo_tool_result(block)
             return
         summary = _stringify_tool_result(block.content)
-        # Spec §8.2 — pair the tool_result with the observed tool_use to detect
-        # output sites. The observer ignores ids it never saw.
+        # Pair the tool_result with the observed tool_use to detect output sites.
+        # The observer ignores ids it never saw.
         self._outputs_observer.observe_tool_result(
             block.tool_use_id, summary, bool(block.is_error)
         )
@@ -431,7 +421,7 @@ class AgentRunner:
 
 
 def _mint_block_id(prefix: str) -> str:
-    """Server-minted opaque block id (`txt_<12hex>` / `thk_<12hex>`, spec §8.6)."""
+    """Return an opaque block id of the form `txt_<12hex>` or `thk_<12hex>`."""
     return f"{prefix}_{secrets.token_hex(6)}"
 
 

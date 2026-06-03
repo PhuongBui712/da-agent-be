@@ -73,7 +73,7 @@ async def test_list_versions_no_versions_dir_returns_empty(client, app):
 
 
 async def test_list_versions_only_curr_no_sidecar(client, app):
-    """Spec §8.2 — 2-slot cap: a fresh write lands in `v_curr` only."""
+    """2-slot cap: a fresh write lands in `v_curr` only."""
     kb_id = await _register_kb(app)
     vdir = _versions_dir(app, kb_id)
     vdir.mkdir(parents=True)
@@ -93,7 +93,7 @@ async def test_list_versions_only_curr_no_sidecar(client, app):
 
 
 async def test_list_versions_curr_and_prev_with_sidecars(client, app):
-    """After two writes the cap holds at 2: v_curr and v_prev side-by-side."""
+    """After two writes the 2-slot cap holds: v_curr and v_prev side-by-side."""
     kb_id = await _register_kb(app)
     vdir = _versions_dir(app, kb_id)
     vdir.mkdir(parents=True)
@@ -140,7 +140,7 @@ async def test_download_v_curr_returns_bytes(client, app):
 
 
 async def test_download_v_prev_returns_bytes(client, app):
-    """Spec §8.2 — `v_prev` is the rollback slot; download must work too."""
+    """`v_prev` is the rollback slot; download must work too."""
     kb_id = await _register_kb(app)
     vdir = _versions_dir(app, kb_id)
     vdir.mkdir(parents=True)

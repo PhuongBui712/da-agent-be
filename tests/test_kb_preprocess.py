@@ -250,9 +250,8 @@ def test_empty_sheet(tmp_path: Path):
 def test_pk_role_assigned_to_self_referencing_id_column(tmp_path: Path):
     """`order_id` in the `Sales` sheet (no `Orders` sheet) must be PK?.
 
-    Spec §5.1 example marks `order_id` with `role: "pk?"`. Our heuristic
-    must accept generic `<noun>_id` patterns when the noun is not another
-    sheet's entity.
+    The heuristic must accept generic `<noun>_id` patterns when the noun is
+    not another sheet's entity.
     """
     path = make_xlsx(
         tmp_path,

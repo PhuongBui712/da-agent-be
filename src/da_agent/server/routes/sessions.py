@@ -65,16 +65,14 @@ async def rename_session(
 async def delete_session(sid: str, state: AppState = Depends(get_state)) -> None:
     if not await state.registry.delete(sid):
         raise HTTPException(status_code=404, detail="session not found")
-    # Phase C 2026-05-31 — wipe the session's outputs subtree and registry
-    # rows BEFORE discarding the runtime (which already cleans up
-    # attachments). Best-effort: errors inside `delete_session_outputs`
-    # don't block runtime cleanup.
+    # Wipe the session's outputs subtree and registry rows BEFORE discarding the
+    # runtime (which already cleans up attachments). Best-effort: errors inside
+    # `delete_session_outputs` don't block runtime cleanup.
     await state.outputs.delete_session_outputs(sid)
     await state.discard_runtime(sid)
-    # Spec §8.5 — wipe the per-session symlink farm under
-    # `<sessions-data>/<sid>/`. Best-effort; rmtree only follows symlinks
-    # to drop the link entries themselves (canonical kb_dir / outputs_dir
-    # subtrees are not affected because they are linked, not nested).
+    # Wipe the per-session symlink farm under `<sessions-data>/<sid>/`.
+    # Best-effort; rmtree only follows symlinks to drop the link entries
+    # themselves (canonical kb_dir / outputs_dir subtrees are not affected).
     import shutil
 
     shutil.rmtree(state.settings.session_data_dir(sid), ignore_errors=True)
@@ -104,9 +102,8 @@ async def get_session_history(
 ) -> MessageHistoryResponse:
     """Return the session's prior turns as SSE-shaped event dicts.
 
-    Empty `events` for fresh sessions (no SDK runner has connected yet).
-    Reads JSONL via `claude_agent_sdk.get_session_messages` -- offloaded
-    to a thread because it is sync filesystem I/O.
+    Returns empty `events` for fresh sessions (no SDK runner has connected yet).
+    Offloads the sync JSONL read to a thread.
     """
     meta = await state.registry.get(sid)
     if meta is None:
@@ -114,9 +111,8 @@ async def get_session_history(
     if not meta.sdk_session_id:
         return MessageHistoryResponse(events=[])
     # `directory=None` lets the SDK scan every project dir under
-    # `CLAUDE_CONFIG_DIR/projects/`. Passing project_root would silently
-    # miss the JSONL on path-normalization mismatches (NFC, symlinks,
-    # worktrees). The single-user data root is small enough that the
-    # extra scan is free.
+    # `CLAUDE_CONFIG_DIR/projects/`. Passing project_root would silently miss
+    # the JSONL on path-normalization mismatches (NFC, symlinks, worktrees).
+    # The single-user data root is small enough that the extra scan is free.
     msgs = await asyncio.to_thread(get_session_messages, meta.sdk_session_id)
     return MessageHistoryResponse(events=replay_to_events(msgs, sid))

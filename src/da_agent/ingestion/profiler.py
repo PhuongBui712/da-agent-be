@@ -3,19 +3,16 @@
 A thin wrapper over `ClaudeSDKClient` that:
 
   * Builds a single-purpose `ClaudeAgentOptions` containing only the
-    `kb_profiler` subagent (registered with `memory="local"`, the configured
-    opus model, and the xlsx skill). Reuses the project's security layer so
-    the profiler runs under the same sandbox + deny rules + Bash hook as the
-    main agent — there is no special permission carve-out.
+    `kb_profiler` subagent (configured opus model and the xlsx skill). Reuses
+    the project's security layer so the profiler runs under the same sandbox +
+    deny rules + Bash hook as the main agent.
 
   * Sends one query (`@kb_profiler Profile <raw_path>`), drains the response
     stream until a `ResultMessage` arrives, and returns the resolved memory
     path (or `None` on failure).
 
-A module-level `asyncio.Semaphore(1)` enforces the CLAUDE.md mandate of "max
-1 opus subagent at a time": multiple concurrent uploads serialise here. The
-semaphore is intentionally global per process (not per-runner) because the
-opus quota is global.
+A module-level `asyncio.Semaphore(1)` serialises concurrent uploads: multiple
+uploads queue here because the opus quota is global per process.
 
 Failures (SDK error, file not produced) surface to the runner, which sets
 status=READY_PARTIAL — the KB stays scope-able, just without semantic memory.
@@ -66,16 +63,15 @@ def build_kb_profiler_definition(settings: Settings) -> AgentDefinition:
     """Construct the kb_profiler AgentDefinition.
 
     NOTE on memory: we do NOT set `memory="local"` here. That SDK feature
-    hard-codes the persistent memory directory to
-    `<project_root>/.claude/agent-memory-local/` (a developer's repo
-    checkout), which is wrong for a packaged tool — the user's data should
-    live under their `~/.da-agent` data root. We pass the absolute target
-    path through the invocation prompt instead. As a result we must list
-    Read/Write/Edit explicitly in `tools` (the SDK's auto-enable for those
-    only fires when `memory` is set).
+    hard-codes the persistent memory directory to the repo checkout, which is
+    wrong for a packaged tool — the user's data should live under their
+    `~/.da-agent` data root. We pass the absolute target path through the
+    invocation prompt instead. As a result we must list Read/Write/Edit
+    explicitly in `tools` (the SDK's auto-enable for those only fires when
+    `memory` is set).
 
-    `maxTurns` is intentionally unset per requirements — the profiler runs
-    to completion for whatever shape the workbook turns out to be.
+    `maxTurns` is intentionally unset — the profiler runs to completion for
+    whatever shape the workbook turns out to be.
     """
     return AgentDefinition(
         description=KB_PROFILER_DESCRIPTION,
@@ -91,10 +87,7 @@ def _build_options(settings: Settings) -> ClaudeAgentOptions:
 
     Reuses the project's sandbox + permission rules + security hook so the
     profiler runs under the exact same isolation as the main agent. The
-    `kb_profiler` AgentDefinition is the only registered subagent — the
-    main loop has no other tools beyond what the SDK exposes by default,
-    plus what the subagent needs to delegate (Read for the invocation
-    prompt and Bash for skill scripts).
+    `kb_profiler` AgentDefinition is the only registered subagent.
     """
     env = dict(os.environ)
     # Keep SDK session JSONL co-located with the rest of the tool's data.

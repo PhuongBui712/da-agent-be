@@ -45,20 +45,19 @@ class MessageHistoryResponse(BaseModel):
 
 # --- Messages --------------------------------------------------------- #
 class AttachmentRef(BaseModel):
-    """Wire ref used in MessageRequest body (spec §8.5)."""
+    """Wire ref used in MessageRequest body."""
 
     attachment_id: str
 
 
 class MessageRequest(BaseModel):
-    """Spec §8.5 — `prompt` is required; `kb_scope` and `attachments` are optional.
+    """`prompt` is required; `kb_scope` and `attachments` are optional.
 
-    Default semantics (2026-06-02):
-      * `kb_scope` missing or null → empty <scope> block (no KBs in scope).
-      * `kb_scope == []`           → empty <scope> block (identical to missing).
-      * `kb_scope == [ids…]`       → only the listed READY/READY_PARTIAL KBs.
+    * `kb_scope` missing or null → empty <scope> block (no KBs in scope).
+    * `kb_scope == []`           → empty <scope> block (identical to missing).
+    * `kb_scope == [ids…]`       → only the listed READY/READY_PARTIAL KBs.
 
-    The BE never silently auto-loads every READY KB. The FE MUST list the
+    The BE never silently auto-loads every READY KB. The FE must list the
     kb_ids it wants the agent to see.
     """
 
@@ -128,7 +127,7 @@ class KbMemoryResponse(BaseModel):
     size_bytes: int
 
 
-# --- KB versions (spec §7, §8.2) ------------------------------------- #
+# --- KB versions -------------------------------------------------------- #
 class KbVersionResponse(BaseModel):
     version: str  # "v1", "v2", ...
     parent_version: str  # "raw" | "v<N-1>"
@@ -143,7 +142,7 @@ class KbVersionListResponse(BaseModel):
     versions: list[KbVersionResponse]
 
 
-# --- Attachments (spec §5.3) ----------------------------------------- #
+# --- Attachments -------------------------------------------------------- #
 class AttachmentResponse(BaseModel):
     attachment_id: str
     filename: str
@@ -156,7 +155,7 @@ class AttachmentListResponse(BaseModel):
     attachments: list[AttachmentResponse]
 
 
-# --- Outputs (spec §8.2) --------------------------------------------- #
+# --- Outputs ------------------------------------------------------------ #
 class OutputResponse(BaseModel):
     output_id: str
     download_url: str  # f"/outputs/{output_id}"

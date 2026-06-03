@@ -1,8 +1,8 @@
-"""Outputs HTTP endpoints (spec §11).
+"""Outputs HTTP endpoints.
 
 Read-only browse + download + delete of standalone outputs. KB-version files
-are served via `/kb/files/{kb_id}/versions/{version}/download` (spec §7) —
-this router does not attempt to surface them.
+are served via `/kb/files/{kb_id}/versions/{version}/download` — this router
+does not surface them.
 """
 
 from __future__ import annotations

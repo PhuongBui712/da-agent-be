@@ -1,14 +1,13 @@
-"""Pure-unit tests for OutputsObserver (spec §8.2).
+"""Pure-unit tests for OutputsObserver.
 
-Phase A 2026-06-01: the observer only emits `standalone` detections under the
-per-session layout
+The observer only emits `standalone` detections under the per-session layout
 
     outputs/<session_id>/<filename>
 
 Direct children of `outputs/<session_id>/` only — anything 2+ levels deep,
 or sidecar `.<output_id>.meta.json` files, are rejected.
 
-The `kb_version` and `attachment_version` branches are DEPRECATED — they
+The `kb_version` and `attachment_version` branches are deprecated — they
 remain in code for type stability but `_classify` returns None for any path
 under `kb_dir` or `attachments_dir`.
 """
@@ -51,7 +50,7 @@ def make_observer(dirs):
 
 
 def test_write_direct_child_of_session_dir_fires(dirs, make_observer):
-    """Phase A: direct child of outputs/<sid>/ is standalone."""
+    """Direct child of outputs/<sid>/ is classified as standalone."""
     outputs_dir, _, _ = dirs
     obs, events = make_observer()
 

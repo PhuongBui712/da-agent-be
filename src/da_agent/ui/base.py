@@ -22,7 +22,7 @@ class AgentUI(Protocol):
     def on_thinking(self, text: str) -> None: ...
     def on_text(self, text: str) -> None: ...
 
-    # ---- token-level streaming (spec §8.6). `block_id` is server-minted
+    # ---- token-level streaming. `block_id` is server-minted
     # (`txt_<12hex>` / `thk_<12hex>`); deltas accumulate per block_id and
     # close on `*_end`. Atomic `on_text` / `on_thinking` are NOT emitted
     # for a block that already saw at least one delta. ----
@@ -52,8 +52,7 @@ class AgentUI(Protocol):
     ) -> None: ...
     def on_error(self, message: str) -> None: ...
 
-    # ---- output registration (spec §8.2). Payload schema is the
-    # `output.created` SSE event from §11. ----
+    # ---- output registration. Payload schema is the `output.created` SSE event. ----
     def on_output(self, payload: dict[str, Any]) -> None: ...
 
     # ---- todo list (snapshot pushed whenever the agent's task list changes) ----

@@ -1,7 +1,6 @@
 """Per-session symlink farm for scoped filesystem visibility.
 
-Spec §8.5 — `kb_scope` must constrain what the agent can `Glob` / `Read`,
-not just what `<scope>` lists in prose. We achieve that by giving the SDK
+`kb_scope` constrains what the agent can `Glob` / `Read` by giving the SDK
 `add_dirs` per-session paths under `<sessions-data>/<sid>/{kb,workspace,outputs}/`
 instead of the global `kb_dir` / `outputs_dir` / `attachments_dir` roots.
 
@@ -27,11 +26,10 @@ def prepare_session_root(settings: Settings, session_id: str) -> None:
 
     Safe to call on every message; cheap when already populated.
 
-    2026-06-02 Bug-A fix: we no longer create the
-    `<sessions-data>/<sid>/outputs/` symlink. The sandbox follows symlinks
-    and rejects writes through the alias as cross-device. `add_dirs` now
-    lists the canonical `outputs_dir/<sid>/` directly. Existing alias
-    symlinks (from older sessions) are removed for cleanliness.
+    No longer creates a `<sessions-data>/<sid>/outputs/` symlink — the
+    sandbox follows symlinks and rejects writes through the alias as
+    cross-device. `add_dirs` lists the canonical `outputs_dir/<sid>/`
+    directly. Existing alias symlinks are removed for cleanliness.
     """
     settings.session_data_dir(session_id).mkdir(parents=True, exist_ok=True)
     settings.session_kb_dir(session_id).mkdir(parents=True, exist_ok=True)

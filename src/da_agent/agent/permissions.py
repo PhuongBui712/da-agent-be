@@ -8,11 +8,10 @@ two built-in tools that need a human:
 - **ExitPlanMode**: when the agent finishes planning we surface the plan for approval
   and, on accept, relax the permission mode.
 
-Spec §8.2 — when the question's first sub-question carries `header == "Target"`,
-the web path additionally validates the (Target, Source) pair, rotates the
-previous `v_curr` to `v_prev` for KB/attachment writes, and returns the
-resolved absolute write path inside `updated_input` so the model writes to it
-verbatim. CLI usage passes `resolve_target=None` and skips that hop.
+When the question's first sub-question carries `header == "Target"`, the web path
+additionally validates the (Target, Source) pair and returns the resolved absolute
+write path inside `updated_input` so the model writes to it verbatim.
+CLI usage passes `resolve_target=None` and skips that hop.
 
 Everything else is allowed (this is a trusted, single-user local tool; all steps
 are still shown in the TUI for transparency).
@@ -39,7 +38,7 @@ AskQuestion = Callable[[QuestionRequest], Awaitable[QuestionResponse]]
 
 @dataclass(slots=True)
 class TargetResolution:
-    """Result of (Target, Source) validation + path resolution (spec §8.2)."""
+    """Result of (Target, Source) validation + path resolution."""
 
     resolved_target_path: str
     resolved_target_kind: str  # "standalone" | "kb_version" | "attachment_version"
@@ -48,8 +47,8 @@ class TargetResolution:
 @dataclass(slots=True)
 class TargetValidationError(Exception):
     """Raised by a `resolve_target` callback when the (Target, Source) pair
-    fails validation per spec §8.2 line 367. The message is surfaced verbatim
-    to the model in `PermissionResultDeny`.
+    fails validation. The message is surfaced verbatim to the model in
+    `PermissionResultDeny`.
     """
 
     message: str
@@ -98,13 +97,12 @@ async def _handle_ask_user_question(
     """Drive the UI for the model's questions and return answers via `updated_input`.
 
     The built-in AskUserQuestion tool reads `updated_input.answers` (a mapping of
-    question text -> selected label string) as the user's response, so the SDK can
-    short-circuit its own prompt and pass the answer straight to the model.
+    question text -> selected label string) as the user's response.
 
-    Spec §8.2 path-resolution: if the first question carries `header == "Target"`
-    AND a `resolve_target` callback was supplied, validate the (Target, Source)
-    pair and inject `resolved_target_path` + `resolved_target_kind` into
-    `updated_input` so the model writes to the correct disk location.
+    If the first question carries `header == "Target"` and a `resolve_target` callback
+    was supplied, validate the (Target, Source) pair and inject `resolved_target_path`
+    + `resolved_target_kind` into `updated_input` so the model writes to the correct
+    disk location.
     """
     raw_questions = list(tool_input.get("questions") or [])
     request = QuestionRequest.from_tool_input(tool_input)
@@ -166,7 +164,7 @@ def _find_target_question_text(raw_questions: list[dict[str, Any]]) -> str | Non
 
 
 def _is_output_target_question(raw_questions: list[dict[str, Any]]) -> bool:
-    """Detect the spec §8.2 output-target chain by header convention.
+    """Detect the output-target question chain by header convention.
 
     First question MUST carry `header == "Target"`. We deliberately fence on
     the literal English string (set by the prompt) so non-output questions —

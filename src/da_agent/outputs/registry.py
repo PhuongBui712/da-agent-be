@@ -1,11 +1,11 @@
-"""Outputs registry — `outputs/registry.json` mirrors `KbRegistry`.
+"""Outputs registry — `outputs/registry.json`.
 
 Standalone outputs only (kind=standalone). KB-bound and attachment-bound
 writes are routed through this same registry; the legacy
 `kb/<kb_id>/versions/` and `attachments/<sid>/<att_id>/versions/` chains are
 no longer written to.
 
-Layout (Phase A 2026-06-01 — flat per-session):
+Layout (flat per-session):
 
     outputs/
       registry.json                   # this file
@@ -103,7 +103,7 @@ class OutputMeta:
 class OutputsRegistry:
     """Single JSON file at `root/registry.json`.
 
-    Files at `root/<session_id>/<filename>` (Phase A 2026-06-01). Sidecar at
+    Files at `root/<session_id>/<filename>`. Sidecar at
     `root/<session_id>/.<output_id>.meta.json`.
     """
 

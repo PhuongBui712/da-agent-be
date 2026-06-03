@@ -1,12 +1,9 @@
 """Attachment CRUD: upload, list, delete per session.
 
-Short-term attachments are scoped to a session and deleted with it (spec §5.3).
+Short-term attachments are scoped to a session and deleted with it.
 Files are streamed to a tmp path then renamed so partial uploads never appear
-at the final path.
-
-Spec §8.2 — attachments support symmetric 2-slot versioning identical to KB:
-on disk under `attachments/<sid>/<att_id>/versions/v_curr.<ext>` and
-`v_prev.<ext>`. The download endpoint at the bottom serves both slots.
+at the final path. Attachments support symmetric 2-slot versioning on disk
+under `attachments/<sid>/<att_id>/versions/v_curr.<ext>` and `v_prev.<ext>`.
 """
 
 from __future__ import annotations
@@ -28,7 +25,7 @@ _VERSION_FILE_RE = re.compile(r"^v_(curr|prev)\.(xlsx|xlsm|xls|csv|tsv)$")
 _VERSION_SLOT_RE = re.compile(r"^v_(curr|prev)$")
 
 # Copy of the pattern from routes/kb.py — intentionally NOT imported from there
-# to keep the two modules independent (spec §11).
+# to keep the two modules independent.
 _FILENAME_CLEAN = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -54,7 +51,7 @@ def _meta_to_response(meta) -> AttachmentResponse:
 
 
 # --------------------------------------------------------------------------- #
-# Endpoints (spec §5.3)
+# Endpoints
 # --------------------------------------------------------------------------- #
 
 
@@ -66,7 +63,7 @@ def _meta_to_response(meta) -> AttachmentResponse:
 async def upload_attachment(
     sid: str, file: UploadFile, state: AppState = Depends(get_state)
 ) -> AttachmentResponse:
-    # 404 if the session doesn't exist in the registry (spec §5.3).
+    # 404 if the session doesn't exist in the registry.
     if await state.registry.get(sid) is None:
         raise HTTPException(status_code=404, detail="session not found")
 

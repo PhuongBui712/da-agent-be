@@ -1,8 +1,6 @@
-"""Ingestion registry — successor to `kb/registry.py`.
+"""Ingestion registry — `kb/registry.json`, atomic-rename writes.
 
-Same on-disk JSON file (`kb/registry.json`) so existing rows survive the
-swap, but the status state machine and metadata schema are extended for the
-memory-driven pipeline:
+Status state machine:
 
     PENDING -> PROFILING -> READY
                        \\-> READY_PARTIAL    (profiler failed; raw.xlsx still usable)
@@ -12,9 +10,8 @@ Crash recovery: any leftover PROFILING row is rewritten to FAILED on `load`
 with `error="interrupted by restart"`. There is no auto-retry — the user
 either re-uploads or hits POST /kb/files/{id}/reprofile manually.
 
-`memory_path` is set when the kb_profiler subagent writes
-`<project_root>/.claude/agent-memory-local/kb_profiler/kb_<id>.md`. It stays
-None for legacy rows that were ingested via the old manifest pipeline.
+`memory_path` is set when the kb_profiler subagent writes its per-KB note.
+It stays None for legacy rows that were ingested via the old manifest pipeline.
 """
 
 from __future__ import annotations
@@ -94,13 +91,7 @@ class IngestionMeta:
 
 
 class IngestionRegistry:
-    """Persistent JSON registry (`kb/registry.json`) — atomic-rename writes.
-
-    Replaces `kb.KbRegistry`. Method signatures match where they overlap so
-    existing handlers (`server/state.py`, `server/routes/kb.py`,
-    `server/scope.py`) need only swap the import + extend the few places
-    that read new fields.
-    """
+    """Persistent JSON registry (`kb/registry.json`) — atomic-rename writes."""
 
     def __init__(self, path: Path) -> None:
         self.path = path

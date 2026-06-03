@@ -1,6 +1,6 @@
-"""Async orchestrator for the new memory-driven KB ingestion pipeline.
+"""Async orchestrator for the memory-driven KB ingestion pipeline.
 
-Successor to `kb.runner`. Status flow:
+Status flow:
 
     PENDING -> PROFILING -> READY              (memory file written)
                        \\-> READY_PARTIAL       (profiler failed; raw.xlsx still usable)

@@ -18,11 +18,10 @@ Two complementary mechanisms protect the user's host:
 The hook intentionally errs on the side of allow: the codebase is for a
 trusted single user. Each rule has a matching test under tests/test_security_*.
 
-Spec ground rules enforced here:
-- Golden Rule 4 (raw.xlsx immutable) — denied via path rule + bash regex.
-- Golden Rule 3 (sessions JSONL is SDK SSOT) — denied via path rule.
-- §8.2 output mechanism — writes outside outputs/, kb/<id>/versions/,
-  attachments/<sid>/<id>/versions/ are denied.
+Ground rules enforced here:
+- raw.xlsx immutable — denied via path rule + bash regex.
+- Sessions JSONL is SDK SSOT — denied via path rule.
+- Writes outside outputs/, kb/<id>/versions/, attachments/<sid>/<id>/versions/ are denied.
 """
 
 from __future__ import annotations
@@ -136,13 +135,13 @@ def build_permission_settings_json(settings: Settings) -> str:
     home = str(settings.data_root)
 
     deny_rules: list[str] = [
-        # Golden Rule 4 — raw.xlsx is immutable. Block both Write and Edit.
+        # raw.xlsx is immutable — block both Write and Edit.
         f"Write({home}/kb/*/raw.xlsx)",
         f"Edit({home}/kb/*/raw.xlsx)",
         # Manifest is BE-managed metadata; agent reads but never writes.
         f"Write({home}/kb/*/manifest.json)",
         f"Edit({home}/kb/*/manifest.json)",
-        # Golden Rule 3 — SDK session JSONL is single source of truth.
+        # SDK session JSONL is single source of truth — never overwrite.
         f"Write({home}/sessions/**)",
         f"Edit({home}/sessions/**)",
         # Original attachment file is immutable; only versions/ is writable.
@@ -310,8 +309,7 @@ def _match_deny_pattern(command: str) -> str | None:
     if _RAW_XLSX_WRITE_TARGET_RE.search(command):
         return (
             "Writes to raw.xlsx are blocked (KB original is immutable). "
-            "Write your output to the resolved_target_path under "
-            "outputs/<session_id>/."
+            "Write to the resolved_target_path under outputs/<session_id>/."
         )
     return None
 

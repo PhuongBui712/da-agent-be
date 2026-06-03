@@ -1,7 +1,7 @@
 """HTTP integration tests for /sessions/{sid}/attachments endpoints.
 
 No SDK interaction needed — these tests only exercise the attachment CRUD
-layer (spec §5.3). Mirrors the fixture pattern from test_kb_routes.py.
+layer. Mirrors the fixture pattern from test_kb_routes.py.
 """
 
 from __future__ import annotations

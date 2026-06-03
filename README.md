@@ -1,81 +1,99 @@
-# DA-Agent — Excel Data-Analyst Agent (Agent module)
+# DA-Agent — Backend
 
-A Senior-Data-Analyst agent built on the **Claude Agent SDK**, driven from a
-**Claude Code-style TUI**. This package is the *agent module* of a larger system; it is
-structured so the same core can later be driven by a web backend without changes.
+Excel data-analyst agent built on the **Claude Agent SDK**, exposed via a
+**FastAPI** server with SSE streaming. It profiles spreadsheets, runs
+hypothesis-driven analysis through specialised subagents, and produces
+deliverables (`.xlsx`, `.pptx`, `.docx`) — proposing a plan and asking
+multiple-choice questions when requirements are ambiguous.
 
-It can read and understand Excel/CSV files (schema + cross-sheet relationships), answer
-simple-to-complex questions, generate new sheets/charts via the Anthropic **xlsx** skill,
-and run an end-to-end investigation using subagents — proposing a **plan for your
-approval** and asking **multiple-choice questions** when requirements are ambiguous.
+> Frontend lives in a sibling repo:
+> **[`PhuongBui712/da-agent-fe`](https://github.com/PhuongBui712/da-agent-fe)**
+> (Vite + React 19 + Tailwind). The `docker-compose.yml` here builds both stacks
+> together.
+
+---
+
+## Architecture
 
 ```
-› Analyze sales.xlsx and surface the key trends
-✻ Thinking …
-● Bash(extract-text /data/sales.xlsx | head -40)
-  ⎿  ## Sheet: Orders …
-▌ Plan
-  1. Profile both sheets …            ← approve / revise inline
-● Task(profiler: profile both sheets)
-  ⎿  Orders: 48,211 rows …            ← subagent steps, indented
-? Where should I put the output?      ← AskUserQuestion picker
-✶ done in 12.3s · 7 turns · $0.0421
+FE (Next sibling repo)
+  │  REST + SSE
+  ▼
+FastAPI server   ─►  AgentRunner  ─►  ClaudeSDKClient  ─►  claude CLI  ─►  model
+     │                  │
+     │                  ├─ subagents: profiler · analyst · reporter
+     │                  ├─ skills:    xlsx · data-analysis  (reporter adds pptx, docx)
+     │                  └─ MCP tool:  AskUserQuestion
+     │
+     ├─ KB ingestion (`kb_profiler` subagent, opus model)
+     ├─ Per-session symlink farm  (kb_scope enforcement)
+     └─ Outputs registry          (per-session + sidecar metadata)
 ```
 
-## Quick start
+| Concern | Where |
+|---|---|
+| HTTP routes (sessions, messages, kb, outputs, attachments) | `src/da_agent/server/routes/` |
+| Agent core + system prompt | `src/da_agent/agent/` |
+| KB ingestion pipeline | `src/da_agent/ingestion/` |
+| Outputs observer + registry | `src/da_agent/outputs/` |
+| Settings / paths | `src/da_agent/config.py` |
+| TUI (CLI mode) | `src/da_agent/ui/` |
 
-Requirements: **Python ≥ 3.10**, **Node.js** (the SDK runs the Claude Code CLI), and an
-Anthropic API key.
+The 6-phase data-analysis methodology is enforced via the `data-analysis`
+skill loaded into the system prompt; phases 3–4 are delegated to `analyst`
+and phase 6 (final deliverable) to `reporter`.
+
+---
+
+## Run with Docker (recommended)
+
+The compose file boots the **backend + frontend** as one stack. The frontend
+build context points at `../da-agent-fe`, so both repos must sit side-by-side.
+
+### Required folder layout
+
+```
+<parent-dir>/
+├── da-agent-be/                ← run `docker compose` from here
+│   ├── docker-compose.yml
+│   ├── Dockerfile
+│   ├── .env                    ← copy from .env.docker.example, fill secrets
+│   └── …
+└── da-agent-fe/                ← sibling, must exist
+    ├── Dockerfile
+    ├── nginx.conf
+    └── …
+```
+
+### Steps
 
 ```bash
-# 1. Claude Code CLI (the SDK spawns it under the hood)
-npm install -g @anthropic-ai/claude-code
+# 1. Clone both repos as siblings
+git clone https://github.com/PhuongBui712/da-agent-be.git  da-agent-be
+git clone https://github.com/PhuongBui712/da-agent-fe.git  da-agent-fe
 
-# 2. This package
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
+# 2. Configure
+cd da-agent-be
+cp .env.docker.example .env
+$EDITOR .env                    # set ANTHROPIC_AUTH_TOKEN at minimum
 
-# 3. Credentials
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# 4. See the TUI without spending tokens
-da-agent demo
-
-# 5. Chat for real
-da-agent           # or: da-agent chat
-```
-
-Optional: install **LibreOffice** so the xlsx skill can recalculate formulas
-(`scripts/recalc.py`).
-
-## Run with Docker (backend + frontend)
-
-Package the whole stack so another machine only needs Docker + a token. The
-backend image bundles Python, Node, and the `claude` CLI (the SDK spawns it as a
-subprocess), so nothing needs installing by hand.
-
-```bash
-# from da-agent-be/  (expects ../da-agent-fe alongside it)
-cp .env.docker.example .env     # then fill in ANTHROPIC_AUTH_TOKEN
+# 3. Boot
 docker compose up --build
 ```
 
-- FE → http://localhost:3000  ·  BE → http://localhost:8765
-- KB / sessions / outputs / attachments persist in the `da-agent-data` volume.
-- Credentials are read from `.env` at runtime — never baked into the images.
+- **FE** → `http://localhost:3000`
+- **BE** → `http://localhost:8765`
+- KB / sessions / outputs / attachments persist in the named volume `da-agent-data`.
+- Credentials are read from `.env` at runtime — never baked into images.
 
-**LibreOffice (formula recalc):** off by default to keep the image small. Enable
-with `docker compose build --build-arg INSTALL_LIBREOFFICE=1 backend` (or flip
-the arg in `docker-compose.yml`).
+### Run on another host (not `localhost`)
 
-### Run on another host (not localhost)
-
-The FE bakes its backend URL at build time and the BE allow-lists FE origins, so
-two values must match the host you serve from:
+The FE bundles its backend URL at **build time** and the BE allow-lists FE
+origins. Two values must match the host you serve from:
 
 ```bash
-# in .env:
-VITE_API_BASE_URL=http://<host>:8765       # FE → BE (baked into FE build)
+# in da-agent-be/.env
+VITE_API_BASE_URL=http://<host>:8765       # baked into FE bundle
 DA_AGENT_CORS_ORIGINS=http://<host>:3000   # BE accepts this FE origin
 
 docker compose up --build
@@ -84,68 +102,123 @@ docker compose up --build
 `DA_AGENT_CORS_ORIGINS` is comma-separated; unset, it defaults to
 `http://127.0.0.1:3000,http://localhost:3000`.
 
-### Commands & flags
-- `da-agent` / `da-agent chat` — interactive multi-turn session
-- `da-agent demo` — scripted walkthrough of the TUI (no API key)
-- `--no-plan` — don't start in plan mode · `--no-thinking` — hide thinking · `--model <id>`
-- In-session: `/plan` re-enter plan mode next turn · `/exit` quit
+### LibreOffice (formula recalc, pptx/docx export)
 
-## Where things live
+Bundled by default (`INSTALL_LIBREOFFICE=1` in `docker-compose.yml`). To slim
+the image, build with `--build-arg INSTALL_LIBREOFFICE=0`.
 
-Data lives under `~/.da-agent` (override with `DA_AGENT_HOME`):
+---
+
+## Run locally (no Docker)
+
+Requirements: **Python ≥ 3.10**, **Node.js** (the SDK spawns the `claude` CLI
+under the hood), and an Anthropic-compatible endpoint.
+
+```bash
+# Claude Code CLI (the SDK shell-outs to it)
+npm install -g @anthropic-ai/claude-code
+
+# This package
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Credentials (Databricks-routed Anthropic shown)
+export ANTHROPIC_BASE_URL=https://<workspace>.azuredatabricks.net/serving-endpoints/anthropic
+export ANTHROPIC_AUTH_TOKEN=<your-pat>
+
+# Boot the API
+da-agent serve --host 127.0.0.1 --port 8765
+```
+
+Optional: install **LibreOffice** so the xlsx skill can recalculate formulas.
+
+---
+
+## CLI
+
+| Command | Purpose |
+|---|---|
+| `da-agent serve` | Start the FastAPI backend (`--host`, `--port`, `--no-plan`, `--no-thinking`, `--model`) |
+| `da-agent chat` | Interactive multi-turn TUI session |
+| `da-agent demo` | Scripted offline TUI walkthrough (no API key) |
+
+In-session: `/plan` re-enter plan mode · `/exit` quit.
+
+---
+
+## HTTP API (high level)
+
+| Group | Endpoints |
+|---|---|
+| Sessions | `GET/POST /sessions`, `GET/PATCH/DELETE /sessions/{sid}`, `POST /sessions/{sid}/fork`, `GET /sessions/{sid}/messages` |
+| Messages (SSE) | `POST /sessions/{sid}/messages` — streams agent events |
+| Interactions | `GET/POST /sessions/{sid}/interactions/{iid}` — `AskUserQuestion` round-trip |
+| Knowledge base | `POST /kb/files` (upload + ingest), `GET/DELETE /kb/files/{kb_id}`, `GET /kb/files/{kb_id}/{manifest,memory,versions}`, `POST /kb/files/{kb_id}/reprocess` |
+| Attachments | `POST/GET /sessions/{sid}/attachments`, `DELETE /sessions/{sid}/attachments/{att_id}` |
+| Outputs | `GET /outputs`, `GET /outputs/{output_id}{,/meta}`, `DELETE /outputs/{output_id}` |
+
+---
+
+## Configuration
+
+All env vars (Settings live in `src/da_agent/config.py`):
+
+| Variable | Purpose |
+|---|---|
+| `ANTHROPIC_BASE_URL` | Anthropic-compatible endpoint URL (Databricks supported) |
+| `ANTHROPIC_AUTH_TOKEN` | Endpoint token / PAT |
+| `ANTHROPIC_MODEL` | Default model alias |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` | Per-tier model id overrides |
+| `ANTHROPIC_CUSTOM_HEADERS` | Extra headers (e.g. Databricks routing flag) |
+| `DA_AGENT_HOME` | Data root (default `~/.da-agent`; Docker `/data`) |
+| `DA_AGENT_MODEL` | Model used by the in-session agent loop |
+| `DA_AGENT_KB_PROFILER_MODEL` | Model used by KB ingestion (defaults to opus) |
+| `DA_AGENT_CORS_ORIGINS` | Comma-separated FE origins allowed by CORS |
+| `DA_AGENT_MAX_TURNS` | Optional turn cap |
+| `DA_AGENT_PLAN_FIRST` | Start each session in plan mode (default `false`) |
+| `DA_AGENT_SHOW_THINKING` | Expose extended-thinking blocks (default `true`) |
+| `DA_AGENT_STREAM` | Token-level SSE streaming (default `true`) |
+| `DA_AGENT_ATTACHMENT_MAX_BYTES` | Upload hard cap (default `100 MB`) |
+| `DA_AGENT_SCOPE_WARN_BYTES` | Soft warn for `<scope>` block size |
+| `VITE_API_BASE_URL` | Baked into the FE bundle at build time |
+
+---
+
+## Data layout (`DA_AGENT_HOME`)
 
 ```
 ~/.da-agent/
-├── kb/          # persistent spreadsheets — manifest + raw + versions/v_curr.xlsx + v_prev.xlsx
-├── outputs/     # registered downloadable outputs (one folder per output_id)
-├── attachments/ # per-session uploads — original + versions/v_curr + v_prev
-└── sessions/    # SDK session JSONL (CLAUDE_CONFIG_DIR) — resumable, no DB
+├── kb/                         # ingested KB files (raw + manifest + versions)
+├── outputs/<sid>/              # registered standalone outputs (flat, per session)
+├── attachments/<sid>/<att_id>/ # per-session uploads
+├── sessions/                   # SDK session JSONL (CLAUDE_CONFIG_DIR) — resumable
+├── sessions-data/<sid>/        # per-session symlink farm (kb_scope enforcement)
+│   ├── kb/<kb_id> → kb/<kb_id> # one symlink per in-scope KB, rebuilt every turn
+│   └── workspace/              # subagent scratch
+└── agent-memory/kb_profiler/   # ingestion profiler memory notes
 ```
 
-## Architecture
+The `sessions-data/<sid>/{kb,workspace}/` farm is the load-bearing scope-enforcement
+layer — it lists in `add_dirs` so the SDK sandbox can only see the KBs explicitly
+in `kb_scope`. The final deliverable is written directly to canonical
+`outputs/<sid>/`.
 
-The agent core depends only on a small **`AgentUI` protocol** — never on the terminal
-libraries. The CLI is one adapter (`ConsoleAgentUI`); a future web backend implements the
-same protocol over a websocket and reuses everything else.
-
-```
-cli.py ─┐
-        ├─► AgentRunner ──► ClaudeSDKClient ──► claude CLI ──► model
-ConsoleAgentUI (AgentUI)        │  builds ClaudeAgentOptions:
-   rich render  +               │   • skills=["xlsx"]  (from .claude/skills/)
-   prompt_toolkit picker        │   • agents={profiler, analyst, visualizer}
-        ▲                       │   • mcp: ask_user_question (custom tool)
-        │  protocol calls       │   • can_use_tool → plan approval (ExitPlanMode)
-        └───────────────────────┘
-```
-
-| Concern | Where | Notes |
-|---|---|---|
-| SDK session + options + render loop | `agent/core.py` | UI-agnostic core |
-| Senior-analyst persona / workflow | `agent/prompts.py` | system prompt |
-| `AskUserQuestion` tool | `agent/tools.py` | in-process SDK MCP tool we fully control |
-| Plan approval | `agent/permissions.py` | intercepts `ExitPlanMode` in `can_use_tool` |
-| Subagents | `agent/subagents.py` | dispatched via the `Task` tool |
-| Interaction payloads | `agent/events.py` | serializable (websocket-ready) |
-| UI seam | `ui/base.py` | `AgentUI` protocol |
-| Terminal render + spinner | `ui/console.py` | `rich` |
-| Tabbed picker / plan prompt | `ui/prompts.py` | `prompt_toolkit`, TTY + non-TTY fallback |
-| xlsx skill (bundled) | `.claude/skills/xlsx/` | discovered via `setting_sources=["project"]` |
-
-### Design choices worth knowing
-- **Plan approval** uses the SDK's `plan` permission mode; when the model calls
-  `ExitPlanMode`, `can_use_tool` surfaces the plan. On approval the runner switches to
-  `acceptEdits` so execution isn't gated step-by-step (all steps still render).
-- **`AskUserQuestion`** is a custom in-process MCP tool rather than the built-in, so the
-  full request→render→answer round-trip is under our control and identical across UIs.
-- **Skills** load from `.claude/skills/` at the project root (the SDK `cwd`). Only `xlsx`
-  is enabled here.
-- **Non-destructive writes** and **output-target clarification** are enforced via the
-  system prompt.
+---
 
 ## Tests
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest                          # full unit + integration suite
 ```
+
+Smoke scripts under `scripts/` exercise live and offline paths
+(`smoke_kb_scope_leak`, `smoke_outputs`, `smoke_pptx_delegation`,
+`smoke_security`, `smoke_streaming`, …). Most run without a live model;
+`smoke_pptx_delegation` and friends require Anthropic credentials.
+
+---
+
+## License
+
+See repository root.

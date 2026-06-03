@@ -45,9 +45,9 @@ class ConsoleAgentUI:
         self._live: Live | None = None
         self._wait_label: str = ""
         self._todos: TodoSnapshot = TodoSnapshot()
-        # Streaming buffers (spec §8.6). Console accumulates deltas per
-        # block_id and flushes at `*_end` via the existing on_text /
-        # on_thinking paths -- inline emission would fight rich.Live.
+        # Streaming buffers. Console accumulates deltas per block_id and flushes
+        # at `*_end` via the existing on_text / on_thinking paths — inline
+        # emission would fight rich.Live.
         self._text_buffers: dict[str, list[str]] = {}
         self._thinking_buffers: dict[str, list[str]] = {}
 
@@ -85,7 +85,7 @@ class ConsoleAgentUI:
         self.console.print()
         self.console.print(Text(text.strip()))
 
-    # --- token-level streaming (spec §8.6) ---------------------------- #
+    # --- token-level streaming ---------------------------------------- #
     def on_text_delta(self, block_id: str, delta: str) -> None:
         self._text_buffers.setdefault(block_id, []).append(delta)
 

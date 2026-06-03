@@ -62,21 +62,21 @@ class Settings:
         default_factory=lambda: _bool_env("DA_AGENT_SHOW_THINKING", True)
     )
 
-    # Token-level streaming via SDK `include_partial_messages` (spec §8.6).
+    # Token-level streaming via SDK `include_partial_messages`.
     # When False, the runner falls back to atomic assistant.text / assistant.thinking
     # SSE events emitted from the trailing AssistantMessage.
     stream_responses: bool = field(
         default_factory=lambda: _bool_env("DA_AGENT_STREAM", True)
     )
 
-    # Spec §5.3 — short-term attachment hard cap. Server returns 413 above this.
+    # Short-term attachment hard cap. Server returns 413 above this.
     attachment_max_bytes: int = field(
         default_factory=lambda: _int_env_default(
             "DA_AGENT_ATTACHMENT_MAX_BYTES", 100 * 1024 * 1024
         )
     )
 
-    # Spec §8.5 — soft warn threshold for assembled `<scope>` block size.
+    # Soft warn threshold for assembled `<scope>` block size.
     scope_warn_bytes: int = field(
         default_factory=lambda: _int_env_default(
             "DA_AGENT_SCOPE_WARN_BYTES", 256 * 1024
@@ -97,15 +97,7 @@ class Settings:
 
     @property
     def workspace_dir(self) -> Path:
-        """DEPRECATED — never expose to the agent.
-
-        Retained as an importable property for backward compatibility with any
-        external consumer. The directory is no longer created by `ensure_dirs`,
-        is no longer in `ClaudeAgentOptions.add_dirs`, and is no longer
-        referenced by the system prompt. Spec §8.2 routes all writes through
-        `outputs_dir` (standalone) or `kb_dir/<id>/versions/` (KB-bound) or
-        `attachments_dir/<sid>/<att_id>/versions/` (attachment-bound).
-        """
+        """Not created by `ensure_dirs` and not exposed to the agent."""
         return self.data_root / "workspace"
 
     @property
@@ -115,22 +107,20 @@ class Settings:
 
     @property
     def outputs_dir(self) -> Path:
-        """Spec §4 / §8.2 — registered standalone outputs."""
+        """Registered standalone outputs."""
         return self.data_root / "outputs"
 
     def outputs_session_dir(self, session_id: str) -> Path:
         """Per-session outputs root: `<outputs_dir>/<session_id>/`.
 
         Created lazily on first write — `ensure_dirs()` does NOT mkdir per-session.
-        Layout: `outputs/<session_id>/<output_id>/<filename>` (Phase C 2026-05-31:
-        all outputs — standalone, KB-bound, attachment-bound — land here so
-        `DELETE /sessions/<sid>` can wipe with a single rmtree).
+        All outputs land here so `DELETE /sessions/<sid>` can wipe with a single rmtree.
         """
         return self.outputs_dir / session_id
 
     @property
     def attachments_dir(self) -> Path:
-        """Spec §4 / §5.3 — short-term per-session attachments."""
+        """Short-term per-session attachments."""
         return self.data_root / "attachments"
 
     @property
@@ -139,17 +129,11 @@ class Settings:
 
     @property
     def agent_memory_dir(self) -> Path:
-        """Persistent memory for ingestion subagents.
+        """Persistent memory for ingestion subagents under `~/.da-agent/agent-memory/`.
 
-        Lives under the app data root (`~/.da-agent/agent-memory/`) so it
-        survives across dev/prod environments and is independent of the
-        repo checkout. Per-agent subdirs are created on first write.
-
-        We intentionally do NOT use the SDK's `memory="local"` field on the
-        kb_profiler subagent: that scope hard-codes the path to
-        `<project_root>/.claude/agent-memory-local/`, which leaks profile
-        artefacts into a developer's checkout. We pass the absolute path
-        explicitly in the invocation prompt instead.
+        Per-agent subdirs are created on first write. We do NOT use the SDK's
+        `memory="local"` field — that hard-codes the path to the repo checkout;
+        instead we pass the absolute path explicitly in the invocation prompt.
         """
         return self.data_root / "agent-memory"
 
@@ -165,7 +149,7 @@ class Settings:
         Each session gets `<sessions-data>/<sid>/{kb, workspace, outputs}/`.
         `kb/` and `outputs/` are populated with symlinks pointing at the
         canonical `kb_dir` / `outputs_dir/<sid>/` so the SDK only sees
-        per-turn-scoped paths through `add_dirs` (spec §8.5 enforcement).
+        per-turn-scoped paths through `add_dirs`.
         """
         return self.data_root / "sessions-data"
 

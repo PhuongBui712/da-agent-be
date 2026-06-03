@@ -1,12 +1,11 @@
 """Manifest schema + atomic IO.
 
-`manifest.json` is the agent's primary view of a KB file (Golden Rule 1 —
-"LLM never sees raw bytes; manifest in, code-pushdown out"). Shapes match the
-spec §5.1 example. All fields are JSON-serializable; dataclasses are
-`asdict`-friendly so reading/writing is mechanical.
+`manifest.json` is the agent's primary view of a KB file. All fields are
+JSON-serializable; dataclasses are `asdict`-friendly so reading/writing is
+mechanical.
 
-The `from_` / `to` rename in `Relationship` mirrors the spec's `"from"`
-JSON key (which collides with the Python keyword), see `to_dict` below.
+The `from_` / `to` rename in `Relationship` mirrors the `"from"` JSON key
+(which collides with the Python keyword), see `to_dict` below.
 """
 
 from __future__ import annotations
@@ -72,11 +71,7 @@ class Manifest:
 
 
 def write_manifest_atomic(path: Path, manifest: Manifest) -> None:
-    """Atomic write via tmp + os.replace.
-
-    Mirrors the pattern in `SessionRegistry._flush_locked`. Crash-safe: a
-    half-written file never appears at `path`.
-    """
+    """Atomic write via tmp + os.replace. Crash-safe: no partial file at `path`."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(
@@ -87,10 +82,5 @@ def write_manifest_atomic(path: Path, manifest: Manifest) -> None:
 
 
 def read_manifest(path: Path) -> dict[str, Any]:
-    """Read `manifest.json` as a plain dict.
-
-    Returned as a dict (not a Manifest) so HTTP handlers can pass it through
-    without round-tripping through the dataclass. The agent reads the file
-    directly off disk anyway -- this is just for the manifest API endpoint.
-    """
+    """Read `manifest.json` as a plain dict for the manifest API endpoint."""
     return json.loads(path.read_text(encoding="utf-8"))

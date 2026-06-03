@@ -66,18 +66,14 @@ async def _resolve_output_target(
     state: AppState,
     sid: str,
 ) -> TargetResolution:
-    """Spec §8.2 — validate (Target, Source) and resolve absolute write path.
+    """Validate (Target, Source) answers and resolve the absolute write path.
 
-    Phase A 2026-06-01: ALL targets land flat under
-    `outputs/<session_id>/<filename>`. Filename collisions in the same
-    session get a `_vN` suffix bumped by `_unique_filename`.
+    All targets land flat under `outputs/<session_id>/<filename>`. Filename
+    collisions in the same session get a `_vN` suffix from `_unique_filename`.
 
-    2026-06-02 Bug-A fix: `resolved_target_path` is the canonical
-    `<data_root>/outputs/<sid>/<filename>` and `add_dirs` lists that same
-    canonical root. We previously tried a symlink alias under
-    `sessions-data/<sid>/outputs/`, but the SDK sandbox follows the
-    symlink and treats the canonical inode as a different device — every
-    Bash write hit EROFS / EXDEV. Direct canonical paths fix that.
+    `resolved_target_path` is the canonical `<data_root>/outputs/<sid>/<filename>`;
+    using the canonical root directly avoids EROFS/EXDEV errors that occur when
+    the sandbox follows a symlink alias across device boundaries.
 
     Raises `TargetValidationError` on any validation failure (the
     permission gate maps it to `PermissionResultDeny`).
@@ -156,7 +152,7 @@ async def _ensure_runner(runtime: SessionRuntime, state: AppState) -> None:
     sid = runtime.meta.id
 
     def on_sdk_session_id(sdk_uuid: str) -> None:
-        # Fire-and-forget capture from `SystemMessage(subtype="init")` —
+        # Fire-and-forget capture from `SystemMessage(subtype="init")`.
         # `WebAgentUI.on_system` runs in the runner task; we hop back to
         # the async registry to persist. Idempotent inside the registry.
         # add_done_callback retrieves any exception so it doesn't surface
@@ -170,8 +166,8 @@ async def _ensure_runner(runtime: SessionRuntime, state: AppState) -> None:
 
     def on_output_detection(det: OutputDetection) -> None:
         # Bridge sync observer -> async registry + UI emission. Fire-and-forget;
-        # not tracked alongside KB ingestion tasks because lifecycle differs
-        # (per-turn — best-effort, OK to be cancelled on shutdown).
+        # not tracked alongside KB ingestion tasks because it is per-turn and
+        # best-effort (OK to be cancelled on shutdown).
         asyncio.create_task(
             _handle_output_detection(det, runtime=runtime, state=state, ui=ui)
         )
@@ -180,9 +176,8 @@ async def _ensure_runner(runtime: SessionRuntime, state: AppState) -> None:
         raw_questions: list[dict[str, Any]],
         raw_answers: list[dict[str, Any]],
     ) -> TargetResolution:
-        # Spec §8.2 — invoked from `permissions.py` after the FE answer
-        # arrives. Phase A 2026-06-01: routes ALL targets flat under
-        # `outputs/<sid>/<filename>`.
+        # Invoked from `permissions.py` after the FE answer arrives.
+        # Routes all targets flat under `outputs/<sid>/<filename>`.
         return await _resolve_output_target(
             raw_questions=raw_questions,
             raw_answers=raw_answers,
@@ -210,12 +205,10 @@ async def _handle_output_detection(
     state: AppState,
     ui: WebAgentUI,
 ) -> None:
-    """Spec §8.2 — register the detected file and emit `output.created`.
+    """Register a detected output file and emit `output.created`.
 
-    Phase A 2026-06-01: only `standalone` detections fire (the observer no
-    longer emits `kb_version` / `attachment_version`). The registry mints
-    `output_id` on adoption and writes the sidecar; we surface the freshly
-    minted id back to the FE.
+    Only `standalone` detections are handled; the registry mints `output_id`
+    on adoption and writes the sidecar.
     """
     if det.kind != "standalone":
         return
@@ -249,13 +242,12 @@ async def post_message(
     if runtime is None:
         raise HTTPException(status_code=404, detail="session not found")
 
-    # Spec §8.5 — bootstrap the per-session symlink farm before validating
-    # scope. Idempotent.
+    # Bootstrap the per-session symlink farm before validating scope. Idempotent.
     prepare_session_root(state.settings, sid)
 
-    # Spec §8.5 — validate kb_scope/attachments and prepend the <scope> block to
-    # the user prompt before the SDK is started. Validation HTTPException(400)
-    # bubbles up; AgentRunner sees only the composed string.
+    # Validate kb_scope/attachments and prepend the <scope> block to the user
+    # prompt. Validation HTTPException(400) bubbles up; AgentRunner sees only
+    # the composed string.
     block = await build_scope(state=state, sid=sid, body=body)
     composed_prompt = render_scope(block, body.prompt)
 
@@ -279,7 +271,7 @@ async def _stream_turn(
         await _ensure_runner(runtime, state)
         await state.registry.touch(runtime.meta.id)
 
-        # Spec §8.5 — rebuild symlink farm for this turn's kb_scope. Runs under
+        # Rebuild symlink farm for this turn's kb_scope. Runs under
         # `runtime.lock` (acquired above), so concurrent turns within a session
         # serialise.
         rebuild_kb_symlinks(state.settings, runtime.meta.id, scope_block)

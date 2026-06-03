@@ -52,9 +52,8 @@ class WebAgentUI:
         self.session_id = session_id
         self._app_state = app_state
         self._stream: TurnStream | None = None
-        # Per-turn streaming bookkeeping (spec §8.6). `_text_delta_seen`
-        # latches True on the first text delta of a turn so we can clear
-        # the thinking wait label exactly once.
+        # `_text_delta_seen` latches True on the first text delta of a turn so
+        # we can clear the thinking wait label exactly once.
         self._text_delta_seen: bool = False
         # Invoked once per turn from `on_system("init", data)` with the SDK's
         # minted UUID. Lets the route layer persist it to SessionMeta so we
@@ -84,10 +83,10 @@ class WebAgentUI:
         stream.emit({"type": type_, "session_id": self.session_id, **data})
 
     def emit_interaction_resolved(self, tool_use_id: str, kind: str) -> None:
-        """Public bridge for the route layer to announce that a parked
-        interaction has been resolved by the user. The reducer pops the
-        entry from `pendingInteractions[]` so a later `interaction.requested`
-        with a fresh `tool_use_id` is the head of the queue.
+        """Announce that a parked interaction has been resolved by the user.
+
+        The FE reducer pops the entry from `pendingInteractions[]` so a later
+        `interaction.requested` with a fresh `tool_use_id` is the head of the queue.
         """
         self._emit("interaction.resolved", tool_use_id=tool_use_id, kind=kind)
 
@@ -172,7 +171,7 @@ class WebAgentUI:
         self._emit("todos.snapshot", items=[item.to_dict() for item in snapshot.items])
 
     def on_output(self, payload: dict[str, Any]) -> None:
-        # Spec §8.2 / §11 — `output.created`. Payload keys vary by kind:
+        # Emits `output.created`. Payload keys vary by kind:
         # standalone -> {output_id, kind, title, download_url}
         # kb_version -> {kind, kb_id, version, title, download_url}
         self._emit("output.created", **payload)

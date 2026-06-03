@@ -1,4 +1,4 @@
-"""Per-turn data scope (spec §8.5).
+"""Per-turn data scope.
 
 Validates `kb_scope` + `attachments` from the message request and composes
 the <scope> block prepended to the user prompt. The agent sees the result
@@ -47,11 +47,10 @@ class ScopeBlock:
 
 
 def _bad_request(message: str) -> HTTPException:
-    """Spec §8.5 validation table — body == {"error": "<message>"}.
+    """Build a 400 HTTPException with body `{"error": "<message>"}`.
 
     FastAPI wraps `HTTPException.detail` under a top-level `detail` key, so
-    clients see `{"detail": {"error": "..."}}` and can read `detail.error`
-    for the verbatim spec string.
+    clients see `{"detail": {"error": "..."}}` and can read `detail.error`.
     """
     return HTTPException(status_code=400, detail={"error": message})
 
@@ -60,13 +59,10 @@ _SCOPABLE_STATUSES = {"READY", "READY_PARTIAL"}
 
 
 async def build_scope(*, state: AppState, sid: str, body: MessageRequest) -> ScopeBlock:
-    """Run the spec §8.5 validation table; raises 400 on first failure.
+    """Validate kb_scope + attachments from the request; raises 400 on first failure.
 
-    Default semantics (2026-06-02): a payload with no `kb_scope` field — or an
-    explicit empty list — yields an empty <scope> block. The caller (FE) MUST
-    list the kb_ids it wants in scope; the BE never silently auto-loads every
-    READY KB. This mirrors the symlink-farm filesystem layer (the operative
-    permission gate) — both are "explicit-only".
+    A missing or empty `kb_scope` yields an empty scope block — the FE must
+    explicitly list the kb_ids it wants in scope.
 
     Validation order:
         1. unknown kb_id    -> 400 "unknown kb_id: <id>"
@@ -85,8 +81,8 @@ async def build_scope(*, state: AppState, sid: str, body: MessageRequest) -> Sco
     block = ScopeBlock()
 
     # --- KB scope ---
-    # `kb_scope is None` (field omitted) and `kb_scope == []` are now identical:
-    # both produce an empty scope. The agent only sees the KBs the FE listed.
+    # `kb_scope is None` and `kb_scope == []` are identical: both produce an
+    # empty scope. The agent only sees the KBs the FE listed.
     if body.kb_scope:
         for kb_id in body.kb_scope:
             meta = await state.kb.get(kb_id)

@@ -30,9 +30,8 @@ from ..state import AppState
 
 router = APIRouter(prefix="/kb", tags=["kb"])
 
-# Defensive limits. Spec mentions `attachment_max_bytes` for short-term
-# attachments (§5.3); KB uploads are persistent and can be larger, but
-# rejecting absurd sizes early protects the executor pool.
+# Defensive limits. KB uploads are persistent and can be larger than
+# attachments, but rejecting absurd sizes early protects the executor pool.
 _MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 _FILENAME_CLEAN = re.compile(r"[^A-Za-z0-9._-]+")
 _ALLOWED_EXTS = {".xlsx", ".xlsm"}
@@ -157,8 +156,7 @@ async def get_kb_file(
 async def get_kb_manifest(
     kb_id: str, state: AppState = Depends(get_state)
 ) -> JSONResponse:
-    """Deprecated: the manifest pipeline was replaced by memory-driven
-    ingestion. Returns 410 Gone with a pointer to /memory.
+    """Returns 410 Gone with a pointer to /memory; manifest pipeline replaced by memory-driven ingestion.
 
     The 404 path (kb not found) takes precedence so callers cannot use the
     410 to probe for kb_id existence.
@@ -224,9 +222,8 @@ async def reprofile_kb_file(
 ) -> KbFileResponse:
     """Manually re-run the ingestion pipeline against an existing KB.
 
-    Used to: (a) backfill memory for legacy KBs ingested by the old
-    manifest pipeline, (b) recover from READY_PARTIAL after the original
-    profile failed, (c) regenerate when the user wants a fresh note.
+    Used to backfill memory for legacy KBs, recover from READY_PARTIAL, or
+    regenerate when the user wants a fresh note.
 
     409 if a profile is already in flight (status PROFILING).
     """
@@ -244,16 +241,15 @@ async def reprofile_kb_file(
             status_code=409,
             detail=f"kb {kb_id} has no raw.xlsx on disk; cannot reprofile",
         )
-    # Clear memory_path AND eagerly transition to PENDING so polling clients
-    # see the in-flight state immediately. The runner will flip it to
-    # PROFILING → READY/READY_PARTIAL.
+    # Eagerly transition to PENDING so polling clients see the in-flight state
+    # immediately. The runner will flip it to PROFILING → READY/READY_PARTIAL.
     await state.kb.clear_memory_path(kb_id)
     await state.kb.update_status(kb_id, "PENDING")
     # Delete the existing memory file BEFORE scheduling. The profiler
-    # subagent's stopping condition is "the file exists"; if we leave the
-    # old file in place the LLM may short-circuit without rewriting on a
-    # reprofile. Removing it forces a real new write (or, on failure, a
-    # clean READY_PARTIAL with no stale content).
+    # subagent's stopping condition is "the file exists"; leaving the old file
+    # in place risks the LLM short-circuiting without rewriting on reprofile.
+    # Removing it forces a real new write (or, on failure, a clean
+    # READY_PARTIAL with no stale content).
     existing_memory = state.settings.kb_profiler_memory_dir / f"{kb_id}.md"
     if existing_memory.exists():
         await asyncio.to_thread(existing_memory.unlink, missing_ok=True)
@@ -279,21 +275,19 @@ async def delete_kb_file(kb_id: str, state: AppState = Depends(get_state)) -> No
     kb_dir = state.settings.kb_dir / kb_id
     if kb_dir.exists():
         await asyncio.to_thread(shutil.rmtree, str(kb_dir), True)
-    # Clean the per-KB memory note if the profiler ever wrote one. We
-    # intentionally do NOT touch MEMORY.md here — the kb_profiler subagent
-    # is responsible for curating its own index, and a stale entry is
-    # harmless (it just refers to a missing file).
+    # Clean the per-KB memory note if the profiler ever wrote one.
+    # MEMORY.md is intentionally left alone — the kb_profiler subagent
+    # curates its own index and a stale entry is harmless.
     memory_file = state.settings.kb_profiler_memory_dir / f"{kb_id}.md"
     if memory_file.exists():
         await asyncio.to_thread(memory_file.unlink, missing_ok=True)
 
 
 # --------------------------------------------------------------------------- #
-# KB version endpoints (spec §7, §8.2, §11) — READ-ONLY.
-# Spec §8.2 — physical 2-version cap: only `v_curr` (latest) and optionally
-# `v_prev` (one-step rollback) live on disk. Older revisions are deleted on
-# rotation. The observer + permission resolver mint these files; we only
-# scan and serve here.
+# KB version endpoints — READ-ONLY.
+# Physical 2-version cap: only `v_curr` (latest) and optionally `v_prev`
+# (one-step rollback) live on disk. Older revisions are deleted on rotation.
+# The observer + permission resolver mint these files; we only scan and serve here.
 # --------------------------------------------------------------------------- #
 _VERSION_FILE_RE = re.compile(r"^v_(curr|prev)\.(xlsx|xlsm|xls|csv|tsv)$")
 _VERSION_SLOT_RE = re.compile(r"^v_(curr|prev)$")
@@ -303,7 +297,7 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 def _scan_versions(versions_dir: Path) -> list[KbVersionResponse]:
     """Scan kb/<id>/versions/ for v_curr.<ext> / v_prev.<ext> files.
 
-    For each, read companion <slot>.meta.json sidecar if present (spec §8.2).
+    For each, read companion <slot>.meta.json sidecar if present.
     Slots are ordered: v_curr first, v_prev second.
     """
     out: list[KbVersionResponse] = []
@@ -389,12 +383,12 @@ async def download_kb_version(
     )
 
 
-# --- Google Sheets import stub (spec §11, §14 open question) --------- #
+# --- Google Sheets import stub ---------------------------------------- #
 @router.post("/files/import-sheet", status_code=status.HTTP_501_NOT_IMPLEMENTED)
 async def import_sheet_stub() -> JSONResponse:
-    """Spec §14 open question — OAuth flow not yet defined.
+    """Google Sheets import — OAuth flow not yet defined.
 
-    Returning 501 here lets the FE see a deliberate `not implemented` rather
+    Returning 501 lets the FE see a deliberate `not implemented` rather
     than a 404 for an endpoint that doesn't exist at all.
     """
     return JSONResponse(

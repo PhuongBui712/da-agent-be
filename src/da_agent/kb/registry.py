@@ -1,17 +1,16 @@
-"""KB registry — `kb/registry.json` mirroring `SessionRegistry`.
+"""KB registry — `kb/registry.json`.
 
 One JSON file on disk, atomic-rename writes, single asyncio.Lock. Holds
 per-KB metadata (status + error). The actual `manifest.json` and `raw.xlsx`
 live one level deeper inside `kb/<kb_id>/`.
 
-Status state machine (spec §8.5):
+Status state machine:
 
     PENDING -> PROCESSING -> READY
                         \\-> FAILED   (error: str captured)
 
 Crash recovery: `load()` rewrites any leftover PROCESSING rows to FAILED with
-`error="interrupted by restart"`. There is no retry path in v1 -- the user
-re-uploads.
+`error="interrupted by restart"`. There is no retry path — the user re-uploads.
 """
 
 from __future__ import annotations

@@ -1,23 +1,23 @@
-"""OutputsObserver — parallel to `TodoStore` (spec §8.2, §8.4).
+"""OutputsObserver — parallel to `TodoStore`.
 
 Watches Write/Edit/Bash tool calls; on tool_result without error, classifies
 the input.file_path or Bash command for paths under the session-scoped
-outputs layout (Phase A 2026-06-01):
+outputs layout:
 
   outputs/<session_id>/<filename>          -> standalone
 
 Direct children of `outputs/<session_id>/` only — anything 2+ levels deep,
 or sidecar `.<output_id>.meta.json` files, are rejected.
 
-DEPRECATED: the `kb_version` and `attachment_version` branches no longer
-fire — KB-bound and attachment-bound writes are routed through the
-standalone layout via `resolved_target_path`.
+The `kb_version` and `attachment_version` branches no longer fire — KB-bound
+and attachment-bound writes are routed through the standalone layout via
+`resolved_target_path`.
 
 Emits a detection through `on_detect`; the runner bridges that into the
 async registry + UI.
 
 Conservative by design: ambiguous matches are dropped silently. Better to
-under-register than mis-register (Anti-Pattern §13).
+under-register than mis-register.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from typing import Any, Callable, Literal
 # Bash: `> path` / `>> path` redirection or an `--output` flag. Conservative:
 # the captured token MUST be an absolute path (`/...`) and must NOT include
 # shell metacharacters that would split a token. Three classes of false
-# positive must be rejected (regression 2026-06-02 Bug-B):
+# positive must be rejected:
 #   1. FD redirects: `2>&1`, `1>&2`, `&>file` — preceded by digit or `&`.
 #   2. Token starts with `&` (e.g. `>&1`).
 #   3. Bare numeric or relative tokens from non-shell contexts, e.g. Python
@@ -46,11 +46,8 @@ _SIDECAR_RE = re.compile(r"^\.out_[0-9a-f]{16}\.meta\.json$")
 
 @dataclass(slots=True)
 class OutputDetection:
-    """One of three kinds (spec §8.2).
-
-    Phase A 2026-06-01: only `standalone` is emitted in practice. The other
-    two literals are retained for type stability.
-    """
+    """One detected output. Only `standalone` is emitted in practice; the other
+    two literals are retained for type stability."""
 
     kind: Literal["standalone", "kb_version", "attachment_version"]
     file_path: Path
@@ -120,6 +117,7 @@ class OutputsObserver:
     def observe_tool_result(
         self, tool_use_id: str, content: Any, is_error: bool
     ) -> None:
+        del content
         if is_error or tool_use_id in self._fired:
             self._pending.pop(tool_use_id, None)
             return
@@ -169,8 +167,7 @@ class OutputsObserver:
             resolved = resolved.resolve(strict=False)
         except OSError:
             return None
-        # Standalone branch (Phase A): require direct child of
-        # `outputs/<session_id>/`. Reject deeper paths and sidecar files.
+        # Require direct child of `outputs/<session_id>/`. Reject deeper paths and sidecar files.
         if resolved.parent == self._session_outputs_dir:
             if _SIDECAR_RE.match(resolved.name):
                 return None
@@ -180,11 +177,10 @@ class OutputsObserver:
                 filename=resolved.name,
                 session_id=self._session_id,
             )
-        # DEPRECATED: KB writes now redirect to outputs/<sid>/. The branch is
-        # kept for symmetry / regression assertions but never emits.
+        # KB writes now redirect to outputs/<sid>/; this branch never emits.
         if _is_under(resolved, self._kb_dir):
             return None
-        # DEPRECATED: same for attachment-bound writes.
+        # Attachment-bound writes also redirect; this branch never emits.
         if _is_under(resolved, self._attachments_dir):
             return None
         return None

@@ -2,8 +2,7 @@
 
 The KB pipeline ingests `.xlsx` files into per-KB directories under
 `~/.da-agent/kb/<kb_id>/` and produces a compact `manifest.json` so the agent
-can reason about schema/data without loading raw rows. Spec: technical-spec
-§5.1, §5.2, §7.
+can reason about schema/data without loading raw rows.
 
 Public surface:
 

@@ -2,7 +2,7 @@
 
 Each session owns `attachments/<sid>/registry.json`. Reads are lazy (first
 access per sid), writes are atomic-rename (mirror kb/registry.py). The whole
-`attachments/<sid>/` tree is removed when the session is deleted (spec §5.3).
+`attachments/<sid>/` tree is removed when the session is deleted.
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ class AttachmentsRegistry:
             return True
 
     async def delete_session(self, session_id: str) -> None:
-        """Remove the entire attachments/<sid>/ directory. Best-effort (spec §5.3)."""
+        """Remove the entire attachments/<sid>/ directory. Best-effort."""
         async with self._lock:
             self._sessions.pop(session_id, None)
             self._loaded.discard(session_id)

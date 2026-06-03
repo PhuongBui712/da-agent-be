@@ -1,15 +1,10 @@
-"""New memory-driven KB ingestion pipeline.
-
-Replaces `da_agent.kb` as the active ingestion path. The legacy module is
-retained on disk (for tests + historical context) but is no longer imported
-by the route layer or registered in `AppState`.
+"""Memory-driven KB ingestion pipeline.
 
 Public surface:
 
 - `IngestionMeta` / `IngestionStatus`  — registry row dataclass + status enum.
-- `IngestionRegistry`                  — atomic-rename JSON registry, replaces
-                                         `kb.KbRegistry` and reuses the same
-                                         on-disk file (`kb/registry.json`).
+- `IngestionRegistry`                  — atomic-rename JSON registry that reuses
+                                         the on-disk file (`kb/registry.json`).
 - `KbProfiler` / `ProfileResult`       — opus-driven subagent invocation.
 - `build_kb_profiler_definition`       — factory for the AgentDefinition;
                                          exposed so tests can assert shape.

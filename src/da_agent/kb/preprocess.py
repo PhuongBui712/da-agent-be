@@ -4,7 +4,7 @@ Stages: sheet inventory -> region detection -> header/dtype inference ->
 column profiling -> cross-sheet FK inference -> manifest assembly. The
 output is a `Manifest` ready for atomic write to `kb/<id>/manifest.json`.
 
-Edge cases (spec §5.2):
+Edge cases:
 
 - **Huge files**: opened with `read_only=True, data_only=True`. Per-column
   profiling samples up to `PROFILE_ROW_CAP` rows; cardinality reports a
