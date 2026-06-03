@@ -21,3 +21,6 @@ data/
 # Dev
 notebooks/
 tasks/
+docs/
+experiment/
+.claude/agents/
