@@ -12,6 +12,7 @@ import pytest_asyncio
 
 from da_agent.config import Settings
 from da_agent.server.app import create_app
+from da_agent.server.google_sheets import NetworkError, NotFoundError, NotPublicError
 
 
 # --------------------------------------------------------------------------- #
@@ -163,3 +164,104 @@ async def test_list_empty_session_returns_empty_list(client, sid):
     r = await client.get(f"/sessions/{sid}/attachments")
     assert r.status_code == 200
     assert r.json()["attachments"] == []
+
+
+# --------------------------------------------------------------------------- #
+# POST /sessions/{sid}/attachments/import-sheet
+# --------------------------------------------------------------------------- #
+_VALID_SHEET_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1XSOLsjlPL2F6jILErWtqHvLHJujOMVa6jRlmPq-vJ48/edit?usp=sharing"
+)
+_SHEET_XLSX = b"PK\x03\x04" + b"\x00" * 1000
+
+
+async def _fake_download_ok(sheet_id, dest, *, max_bytes, **kw):
+    dest.write_bytes(_SHEET_XLSX)
+    return len(_SHEET_XLSX)
+
+
+async def test_import_sheet_attachment_201_with_name(client, sid, monkeypatch):
+    monkeypatch.setattr(
+        "da_agent.server.routes.attachments.download_sheet_as_xlsx", _fake_download_ok
+    )
+    r = await client.post(
+        f"/sessions/{sid}/attachments/import-sheet",
+        json={"url": _VALID_SHEET_URL, "name": "my_sheet"},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["filename"] == "my_sheet.xlsx"
+    assert body["attachment_id"].startswith("att_")
+
+
+async def test_import_sheet_attachment_201_auto_name(client, sid, monkeypatch):
+    monkeypatch.setattr(
+        "da_agent.server.routes.attachments.download_sheet_as_xlsx", _fake_download_ok
+    )
+    r = await client.post(
+        f"/sessions/{sid}/attachments/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["filename"].startswith("imported_sheet_")
+    assert body["filename"].endswith(".xlsx")
+
+
+async def test_import_sheet_attachment_404_unknown_session(client):
+    r = await client.post(
+        "/sessions/sess_unknown/attachments/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 404
+
+
+async def test_import_sheet_attachment_400_invalid_url(client, sid):
+    r = await client.post(
+        f"/sessions/{sid}/attachments/import-sheet",
+        json={"url": "https://example.com/not-a-sheet"},
+    )
+    assert r.status_code == 400
+
+
+async def test_import_sheet_attachment_403_not_public(client, sid, monkeypatch):
+    async def fake_not_public(sheet_id, dest, *, max_bytes, **kw):
+        raise NotPublicError("not public")
+
+    monkeypatch.setattr(
+        "da_agent.server.routes.attachments.download_sheet_as_xlsx", fake_not_public
+    )
+    r = await client.post(
+        f"/sessions/{sid}/attachments/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 403
+
+
+async def test_import_sheet_attachment_404_not_found(client, sid, monkeypatch):
+    async def fake_not_found(sheet_id, dest, *, max_bytes, **kw):
+        raise NotFoundError("not found")
+
+    monkeypatch.setattr(
+        "da_agent.server.routes.attachments.download_sheet_as_xlsx", fake_not_found
+    )
+    r = await client.post(
+        f"/sessions/{sid}/attachments/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 404
+
+
+async def test_import_sheet_attachment_502_network_error(client, sid, monkeypatch):
+    async def fake_network_err(sheet_id, dest, *, max_bytes, **kw):
+        raise NetworkError("connection refused")
+
+    monkeypatch.setattr(
+        "da_agent.server.routes.attachments.download_sheet_as_xlsx", fake_network_err
+    )
+    r = await client.post(
+        f"/sessions/{sid}/attachments/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 502

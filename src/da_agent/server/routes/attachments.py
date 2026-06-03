@@ -11,12 +11,21 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 
-from ..schemas import AttachmentListResponse, AttachmentResponse
+from ..google_sheets import (
+    NetworkError,
+    NotFoundError,
+    NotPublicError,
+    download_sheet_as_xlsx,
+    extract_sheet_id,
+    InvalidUrlError,
+)
+from ..schemas import AttachmentListResponse, AttachmentResponse, ImportSheetRequest
 from ..state import AppState
 
 router = APIRouter(prefix="/sessions", tags=["attachments"])
@@ -90,6 +99,12 @@ async def upload_attachment(
         tmp_path.unlink(missing_ok=True)
         raise
 
+    return await _finalize_attachment_upload(state, sid, tmp_path, filename, total, mime)
+
+
+async def _finalize_attachment_upload(
+    state: AppState, sid: str, tmp_path: Path, filename: str, total: int, mime: str
+) -> AttachmentResponse:
     if total == 0:
         tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="file is empty")
@@ -136,6 +151,54 @@ async def delete_attachment(
     att_dir = state.attachments.path_for(meta).parent
     if att_dir.exists():
         await asyncio.to_thread(shutil.rmtree, str(att_dir), True)
+
+
+@router.post(
+    "/{sid}/attachments/import-sheet",
+    response_model=AttachmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_attachment_from_sheet(
+    sid: str, body: ImportSheetRequest, state: AppState = Depends(get_state)
+) -> AttachmentResponse:
+    if await state.registry.get(sid) is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    try:
+        sheet_id = extract_sheet_id(body.url)
+    except InvalidUrlError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    base = body.name.strip() if body.name else f"imported_sheet_{sheet_id[:8]}"
+    filename = _sanitize_filename(f"{base}.xlsx")
+
+    att_root = state.settings.attachments_dir
+    tmp_dir = att_root / sid / "_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f"sheet_{uuid.uuid4().hex}.bin"
+
+    max_bytes = state.settings.attachment_max_bytes
+    cap = max_bytes if max_bytes > 0 else 500 * 1024 * 1024
+
+    try:
+        total = await download_sheet_as_xlsx(sheet_id, tmp_path, max_bytes=cap)
+    except NotPublicError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=403, detail=str(exc))
+    except NotFoundError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=404, detail=str(exc))
+    except NetworkError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=502, detail=str(exc))
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    return await _finalize_attachment_upload(
+        state, sid, tmp_path, filename, total,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 def _find_attachment_version(versions_dir: Path, slot: str) -> Path | None:

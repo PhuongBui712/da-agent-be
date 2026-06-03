@@ -13,6 +13,7 @@ import pytest_asyncio
 
 from da_agent.config import Settings
 from da_agent.server.app import create_app
+from da_agent.server.google_sheets import NetworkError, NotFoundError, NotPublicError
 
 
 # --------------------------------------------------------------------------- #
@@ -343,6 +344,99 @@ async def test_reprofile_schedules_pipeline_and_returns_202(client, app, monkeyp
 # --------------------------------------------------------------------------- #
 # DELETE — memory file cleanup
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# POST /kb/files/import-sheet
+# --------------------------------------------------------------------------- #
+_VALID_SHEET_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1XSOLsjlPL2F6jILErWtqHvLHJujOMVa6jRlmPq-vJ48/edit?usp=sharing"
+)
+_SHEET_XLSX = b"PK\x03\x04" + b"\x00" * 1000
+
+
+async def _fake_download_ok(sheet_id, dest, *, max_bytes, **kw):
+    dest.write_bytes(_SHEET_XLSX)
+    return len(_SHEET_XLSX)
+
+
+async def test_import_sheet_202_with_name(client, monkeypatch):
+    monkeypatch.setattr(
+        "da_agent.server.routes.kb.download_sheet_as_xlsx", _fake_download_ok
+    )
+    r = await client.post(
+        "/kb/files/import-sheet",
+        json={"url": _VALID_SHEET_URL, "name": "my_data"},
+    )
+    assert r.status_code == 202
+    body = r.json()
+    assert body["filename"] == "my_data.xlsx"
+    assert body["id"].startswith("kb_")
+
+
+async def test_import_sheet_202_auto_name(client, monkeypatch):
+    monkeypatch.setattr(
+        "da_agent.server.routes.kb.download_sheet_as_xlsx", _fake_download_ok
+    )
+    r = await client.post(
+        "/kb/files/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 202
+    body = r.json()
+    assert body["filename"].startswith("imported_sheet_")
+    assert body["filename"].endswith(".xlsx")
+
+
+async def test_import_sheet_400_invalid_url(client):
+    r = await client.post(
+        "/kb/files/import-sheet",
+        json={"url": "https://example.com/not-a-sheet"},
+    )
+    assert r.status_code == 400
+
+
+async def test_import_sheet_403_not_public(client, monkeypatch):
+    async def fake_not_public(sheet_id, dest, *, max_bytes, **kw):
+        raise NotPublicError("not public")
+
+    monkeypatch.setattr(
+        "da_agent.server.routes.kb.download_sheet_as_xlsx", fake_not_public
+    )
+    r = await client.post(
+        "/kb/files/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 403
+
+
+async def test_import_sheet_404_not_found(client, monkeypatch):
+    async def fake_not_found(sheet_id, dest, *, max_bytes, **kw):
+        raise NotFoundError("not found")
+
+    monkeypatch.setattr(
+        "da_agent.server.routes.kb.download_sheet_as_xlsx", fake_not_found
+    )
+    r = await client.post(
+        "/kb/files/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 404
+
+
+async def test_import_sheet_502_network_error(client, monkeypatch):
+    async def fake_network_err(sheet_id, dest, *, max_bytes, **kw):
+        raise NetworkError("connection refused")
+
+    monkeypatch.setattr(
+        "da_agent.server.routes.kb.download_sheet_as_xlsx", fake_network_err
+    )
+    r = await client.post(
+        "/kb/files/import-sheet",
+        json={"url": _VALID_SHEET_URL},
+    )
+    assert r.status_code == 502
+
+
 async def test_delete_cleans_memory_file(client, app, settings):
     r = await client.post(
         "/kb/files",

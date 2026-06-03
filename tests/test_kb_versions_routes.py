@@ -172,9 +172,14 @@ async def test_download_version_bogus_format_returns_400(client, app):
     assert r.status_code == 400
 
 
-async def test_import_sheet_stub_returns_501(client):
+async def test_import_sheet_missing_body_returns_422(client):
     r = await client.post("/kb/files/import-sheet")
-    assert r.status_code == 501
-    body = r.json()
-    assert "error" in body
-    assert "spec_reference" in body
+    assert r.status_code == 422
+
+
+async def test_import_sheet_invalid_url_returns_400(client):
+    r = await client.post(
+        "/kb/files/import-sheet",
+        json={"url": "https://example.com/not-a-sheet"},
+    )
+    assert r.status_code == 400

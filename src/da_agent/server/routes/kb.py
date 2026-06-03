@@ -12,6 +12,7 @@ import asyncio
 import json
 import re
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, stat
 from fastapi.responses import FileResponse, JSONResponse
 
 from ...ingestion import run_pipeline
+from ..google_sheets import (
+    InvalidUrlError,
+    NetworkError,
+    NotFoundError,
+    NotPublicError,
+    download_sheet_as_xlsx,
+    extract_sheet_id,
+)
 from ..schemas import (
+    ImportSheetRequest,
     KbFileListResponse,
     KbFileResponse,
     KbMemoryResponse,
@@ -99,6 +109,12 @@ async def upload_kb_file(
         tmp_path.unlink(missing_ok=True)
         raise
 
+    return await _finalize_kb_upload(state, kb_root, tmp_path, filename, total)
+
+
+async def _finalize_kb_upload(
+    state: AppState, kb_root: Path, tmp_path: Path, filename: str, total: int
+) -> KbFileResponse:
     if total == 0:
         tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="file is empty")
@@ -383,18 +399,48 @@ async def download_kb_version(
     )
 
 
-# --- Google Sheets import stub ---------------------------------------- #
-@router.post("/files/import-sheet", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-async def import_sheet_stub() -> JSONResponse:
-    """Google Sheets import — OAuth flow not yet defined.
+@router.post(
+    "/files/import-sheet",
+    response_model=KbFileResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def import_kb_from_sheet(
+    body: ImportSheetRequest, state: AppState = Depends(get_state)
+) -> KbFileResponse:
+    try:
+        sheet_id = extract_sheet_id(body.url)
+    except InvalidUrlError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
-    Returning 501 lets the FE see a deliberate `not implemented` rather
-    than a 404 for an endpoint that doesn't exist at all.
-    """
-    return JSONResponse(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        content={
-            "error": "Google Sheets import not implemented",
-            "spec_reference": "technical-spec.md §14 open question (OAuth)",
-        },
-    )
+    base = body.name.strip() if body.name else f"imported_sheet_{sheet_id[:8]}"
+    filename = _sanitize_filename(f"{base}.xlsx")
+    if Path(filename).suffix.lower() not in _ALLOWED_EXTS:
+        raise HTTPException(status_code=400, detail="only .xlsx / .xlsm files are accepted")
+
+    kb_root = state.settings.kb_dir
+    kb_root.mkdir(parents=True, exist_ok=True)
+    tmp_dir = kb_root / "_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f"sheet_{uuid.uuid4().hex}.bin"
+
+    try:
+        total = await download_sheet_as_xlsx(
+            sheet_id, tmp_path, max_bytes=_MAX_UPLOAD_BYTES,
+        )
+    except InvalidUrlError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc))
+    except NotPublicError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=403, detail=str(exc))
+    except NotFoundError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=404, detail=str(exc))
+    except NetworkError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=502, detail=str(exc))
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    return await _finalize_kb_upload(state, kb_root, tmp_path, filename, total)

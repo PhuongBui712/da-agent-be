@@ -13,7 +13,7 @@
 #   5.  GET /kb/files/<id>/manifest -> 200 with sheets containing Customers/Products/Sales
 #   6.  POST /sessions/<sid>/attachments (multipart) -> 201 AttachmentResponse
 #   7.  GET /sessions/<sid>/attachments -> list contains the new attachment
-#   8.  POST /kb/files/import-sheet -> 501 (deliberate stub)
+#   8.  POST /kb/files/import-sheet -> 400 on bogus URL (real endpoint, not stub)
 #   9.  GET /kb/files/<id>/versions -> 200 (likely empty until agent writes)
 #  10.  GET /outputs?session_id=<sid> -> 200 (empty initially)
 #  11.  POST /sessions/<sid>/messages with kb_scope=[]   -> 400 (validation)
@@ -106,13 +106,13 @@ echo "$ATTLIST" | jq -e --arg id "$ATT_ID" '.attachments | map(.attachment_id) |
   || fail "newly-uploaded attachment missing from list"
 ok "attachment listed"
 
-# 8. Sheets stub
-step "POST $BASE/kb/files/import-sheet (expect 501)"
+# 8. Sheets import — real endpoint, validates URL shape (bogus host → 400)
+step "POST $BASE/kb/files/import-sheet (bogus URL, expect 400)"
 SHEETS_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
   -H 'Content-Type: application/json' -d '{"name":"x","url":"https://docs.google.com/x"}' \
   "$BASE/kb/files/import-sheet")
-[[ "$SHEETS_CODE" == "501" ]] || fail "expected 501 from /kb/files/import-sheet, got $SHEETS_CODE"
-ok "501 (Not Implemented)"
+[[ "$SHEETS_CODE" == "400" ]] || fail "expected 400 from /kb/files/import-sheet on bogus URL, got $SHEETS_CODE"
+ok "400 (invalid URL — real endpoint live)"
 
 # 9. KB versions
 step "GET $BASE/kb/files/$KB_ID/versions"

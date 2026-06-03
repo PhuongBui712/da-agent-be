@@ -142,6 +142,12 @@ class KbVersionListResponse(BaseModel):
     versions: list[KbVersionResponse]
 
 
+# --- Google Sheets import ----------------------------------------------- #
+class ImportSheetRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=2048)
+    name: str | None = Field(default=None, max_length=200)
+
+
 # --- Attachments -------------------------------------------------------- #
 class AttachmentResponse(BaseModel):
     attachment_id: str

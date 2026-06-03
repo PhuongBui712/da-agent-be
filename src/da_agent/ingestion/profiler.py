@@ -97,7 +97,7 @@ def _build_options(settings: Settings) -> ClaudeAgentOptions:
         cwd=str(settings.project_root),
         # Discover .claude/skills (xlsx). We do NOT include "user" because
         # we don't want host-level Claude config bleeding into ingestion.
-        setting_sources=["project", "local"],
+        setting_sources=["project"],
         skills=["xlsx"],
         agents={"kb_profiler": build_kb_profiler_definition(settings)},
         # The main loop must be allowed to dispatch the subagent (Task) and
